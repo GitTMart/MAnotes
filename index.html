@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TC Notes Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">TC</div>
+          <div>
+            <h1>Meeting Notes</h1>
+            <p>Projects, decisions, and action items</p>
+          </div>
+        </div>
+
+        <div class="project-actions">
+          <button class="primary-button" id="newProjectButton" type="button">+ New Project</button>
+          <button class="secondary-button" id="archiveNotesButton" type="button">Archive Notes</button>
+          <button class="secondary-button" id="themeToggleButton" type="button">Try Studio Look</button>
+        </div>
+
+        <div class="sidebar-label">Projects</div>
+        <nav class="project-list" id="projectList" aria-label="Projects"></nav>
+      </aside>
+
+      <main class="workspace">
+        <section class="topbar">
+          <div>
+            <p class="eyebrow">Current Project</p>
+            <h2 id="projectTitle">Select a project</h2>
+          </div>
+          <div class="status-pill" id="saveStatus">Saved</div>
+        </section>
+
+        <nav class="project-tabs" id="projectTabs" aria-label="Project tabs"></nav>
+
+        <details class="search-panel collapsible-search">
+          <summary>
+            <span>
+              <span class="eyebrow">Find Anything</span>
+              <strong>Ask Your Notes</strong>
+            </span>
+            <span class="summary-hint">Open</span>
+          </summary>
+
+          <div class="search-content">
+            <label class="search-field">
+              Search notes
+              <input id="searchInput" type="search" placeholder="Search by keyword, person, decision..." />
+            </label>
+
+            <div class="ask-box">
+              <label>
+                Ask a question
+                <textarea id="questionInput" placeholder="What decisions were made about the budget?"></textarea>
+              </label>
+              <button class="primary-button" id="askButton" type="button">Ask AI</button>
+            </div>
+
+            <div class="answer-box" id="answerBox">
+              AI answers will appear here. If the AI key is not set up yet, search results still work.
+            </div>
+          </div>
+        </details>
+
+        <section class="notes-layout">
+          <div class="notes-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Notes</p>
+                <h3 id="noteHeader">Meeting Notes</h3>
+              </div>
+              <button class="secondary-button" id="newNoteButton" type="button">New Note</button>
+            </div>
+
+            <div class="note-fields">
+              <label>
+                Title
+                <input id="noteTitle" type="text" placeholder="Weekly project sync" />
+              </label>
+              <label>
+                Date
+                <input id="noteDate" type="date" />
+              </label>
+              <fieldset class="meeting-type full-span">
+                <legend>Meeting Type</legend>
+                <label>
+                  <input id="meetingInPerson" name="meetingType" type="checkbox" value="In-Person" />
+                  In-Person
+                </label>
+                <label>
+                  <input id="meetingVirtual" name="meetingType" type="checkbox" value="Virtual" />
+                  Virtual
+                </label>
+              </fieldset>
+              <details class="attendee-details full-span">
+                <summary>
+                  <span>Attendees</span>
+                  <span class="summary-hint">Open</span>
+                </summary>
+                <div class="attendee-content">
+                  <label>
+                    Attendee names
+                    <input id="noteAttendees" type="text" placeholder="Names separated by commas" />
+                  </label>
+                  <div class="attendee-screenshot" id="attendeePasteZone" tabindex="0">
+                    <div>
+                      <strong>Attendee screenshot</strong>
+                      <span>Paste a screenshot here, or paste while the attendee field is active.</span>
+                    </div>
+                    <button class="secondary-button" id="removeAttendeeImageButton" type="button">Remove Image</button>
+                    <img id="attendeeImagePreview" alt="Pasted attendee list" />
+                  </div>
+                </div>
+              </details>
+              <label class="full-span discussion-field">
+                <span>Discussion</span>
+                <div class="discussion-key" aria-label="Discussion note markers">
+                  <span><strong>-*</strong> Action Item</span>
+                  <span><strong>-**</strong> Client Decision</span>
+                </div>
+                <div id="noteDiscussion" class="discussion-editor-box" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="- Type notes here. Use -* for action items and -** for client decisions."></div>
+              </label>
+            </div>
+          </div>
+
+          <div class="lists-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">AI Organizer</p>
+                <h3>Final Report</h3>
+              </div>
+              <div class="report-actions">
+                <button class="secondary-button" id="emailReportButton" type="button">Email Report</button>
+                <button class="secondary-button" id="downloadReportButton" type="button">Download Report</button>
+                <button class="secondary-button" id="downloadActionItemsButton" type="button">Download Action Items</button>
+                <button class="primary-button" id="createReportButton" type="button">Create Report</button>
+              </div>
+            </div>
+
+            <div class="report-box" id="finalReport">Final report will appear here after your notes are done.</div>
+          </div>
+        </section>
+
+        <section class="timeline-section">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Project Timeline</p>
+              <h3 id="projectHistoryTitle">All Notes For This Project</h3>
+            </div>
+            <div class="note-count" id="noteCount">0 notes</div>
+          </div>
+          <div class="timeline" id="notesTimeline"></div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="projectDialog">
+      <form method="dialog" class="dialog-card" id="projectForm">
+        <h3>Create Project</h3>
+        <label>
+          Client
+          <input id="clientNameInput" type="text" placeholder="Acme Co." required />
+        </label>
+        <label>
+          Project
+          <input id="projectNameInput" type="text" placeholder="Client onboarding" required />
+        </label>
+        <div class="dialog-actions">
+          <button class="secondary-button" id="cancelProjectButton" value="cancel" type="button">Cancel</button>
+          <button class="primary-button" id="createProjectConfirm" value="default" type="submit">Create</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="app.js"></script>
+  </body>
+</html>
