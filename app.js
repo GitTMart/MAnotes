@@ -1,4 +1,6 @@
 const state = {
+  employees: [],
+  activeEmployeeId: null,
   projects: [],
   activeProjectId: null,
   activeNoteId: null,
@@ -11,15 +13,21 @@ const state = {
   isRenderingDiscussion: false,
 };
 
-const themeKey = "tc-notes-theme";
 const localBackupKey = "tc-notes-backup-v1";
+const activeSelectionKey = "ma-notes-active-selection";
 
 const els = {
+  employeeSelect: document.getElementById("employeeSelect"),
+  editEmployeeButton: document.getElementById("editEmployeeButton"),
+  newEmployeeButton: document.getElementById("newEmployeeButton"),
+  employeeDialog: document.getElementById("employeeDialog"),
+  employeeForm: document.getElementById("employeeForm"),
+  cancelEmployeeButton: document.getElementById("cancelEmployeeButton"),
+  employeeNameInput: document.getElementById("employeeNameInput"),
   projectList: document.getElementById("projectList"),
   projectTabs: document.getElementById("projectTabs"),
   newProjectButton: document.getElementById("newProjectButton"),
   archiveNotesButton: document.getElementById("archiveNotesButton"),
-  themeToggleButton: document.getElementById("themeToggleButton"),
   projectDialog: document.getElementById("projectDialog"),
   projectForm: document.getElementById("projectForm"),
   cancelProjectButton: document.getElementById("cancelProjectButton"),
@@ -37,6 +45,9 @@ const els = {
   attendeePasteZone: document.getElementById("attendeePasteZone"),
   attendeeImagePreview: document.getElementById("attendeeImagePreview"),
   removeAttendeeImageButton: document.getElementById("removeAttendeeImageButton"),
+  handwritingDropZone: document.getElementById("handwritingDropZone"),
+  handwrittenNotesInput: document.getElementById("handwrittenNotesInput"),
+  handwritingStatus: document.getElementById("handwritingStatus"),
   noteDiscussion: document.getElementById("noteDiscussion"),
   createReportButton: document.getElementById("createReportButton"),
   emailReportButton: document.getElementById("emailReportButton"),
@@ -44,6 +55,7 @@ const els = {
   downloadActionItemsButton: document.getElementById("downloadActionItemsButton"),
   finalReport: document.getElementById("finalReport"),
   searchInput: document.getElementById("searchInput"),
+  searchScope: document.getElementById("searchScope"),
   questionInput: document.getElementById("questionInput"),
   askButton: document.getElementById("askButton"),
   answerBox: document.getElementById("answerBox"),
@@ -51,26 +63,6 @@ const els = {
   noteCount: document.getElementById("noteCount"),
   projectHistoryTitle: document.getElementById("projectHistoryTitle"),
 };
-
-function applySavedTheme() {
-  const savedTheme = localStorage.getItem(themeKey);
-  const theme = ["classic", "studio", "warm"].includes(savedTheme) ? savedTheme : "classic";
-  document.body.dataset.theme = theme;
-  const labels = {
-    classic: "Try Studio Look",
-    studio: "Try Warm Look",
-    warm: "Use Classic Look",
-  };
-  els.themeToggleButton.textContent = labels[theme];
-}
-
-function toggleTheme() {
-  const themes = ["classic", "studio", "warm"];
-  const currentIndex = themes.indexOf(document.body.dataset.theme || "classic");
-  const nextTheme = themes[(currentIndex + 1) % themes.length];
-  localStorage.setItem(themeKey, nextTheme);
-  applySavedTheme();
-}
 
 function uid(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -81,11 +73,47 @@ function today() {
 }
 
 function activeProject() {
-  return state.projects.find((project) => project.id === state.activeProjectId);
+  return activeProjects().find((project) => project.id === state.activeProjectId);
 }
 
 function activeNote() {
   return activeProject()?.notes.find((note) => note.id === state.activeNoteId);
+}
+
+function activeEmployee() {
+  return state.employees.find((employee) => employee.id === state.activeEmployeeId);
+}
+
+function activeProjects() {
+  return activeEmployee()?.projects || [];
+}
+
+function allProjectsWithEmployees() {
+  return state.employees.flatMap((employee) =>
+    (employee.projects || []).map((project) => ({
+      employee,
+      project,
+    }))
+  );
+}
+
+function newEmployee(name = "Employee") {
+  return {
+    id: uid("employee"),
+    name: String(name || "Employee").trim() || "Employee",
+    createdAt: new Date().toISOString(),
+    projects: [],
+  };
+}
+
+function newProject(clientName = "", projectName = "") {
+  return {
+    id: uid("project"),
+    clientName: String(clientName || "").trim(),
+    projectName: String(projectName || "").trim() || "Untitled project",
+    createdAt: new Date().toISOString(),
+    notes: [],
+  };
 }
 
 function projectLabel(project) {
@@ -115,27 +143,24 @@ function newNote() {
 
 async function loadData() {
   const data = await loadServerData();
-  const serverProjects = (data.projects || []).map(normalizeProject);
+  const serverEmployees = normalizeEmployeesFromData(data);
   const localBackup = readLocalBackup();
-  const usedLocalBackup = shouldUseLocalBackup(localBackup, serverProjects);
+  const usedLocalBackup = shouldUseLocalBackup(localBackup, serverEmployees);
 
-  state.projects = usedLocalBackup ? localBackup.projects : serverProjects;
+  state.employees = usedLocalBackup ? localBackup.employees : serverEmployees;
 
-  if (state.projects.length === 0) {
-    state.projects = [
-      {
-        id: uid("project"),
-        clientName: "General",
-        projectName: "Notes",
-        createdAt: new Date().toISOString(),
-        notes: [],
-      },
-    ];
+  if (state.employees.length === 0) {
+    state.employees = [newEmployee("My Notes")];
+  }
+
+  if (activeProjects().length === 0 && state.employees[0].projects.length === 0) {
+    state.employees[0].projects = [newProject("General", "Notes")];
     await saveData(true);
   }
 
   persistLocalBackup();
-  state.activeProjectId = state.projects[0].id;
+  restoreActiveSelection();
+  ensureEmployeeHasProject();
   ensureProjectHasNote();
   render();
 
@@ -162,10 +187,10 @@ function readLocalBackup() {
     const backup = JSON.parse(localStorage.getItem(localBackupKey) || "{}");
     return {
       savedAt: backup.savedAt || "",
-      projects: Array.isArray(backup.projects) ? backup.projects.map(normalizeProject) : [],
+      employees: normalizeEmployeesFromData(backup),
     };
   } catch (error) {
-    return { savedAt: "", projects: [] };
+    return { savedAt: "", employees: [] };
   }
 }
 
@@ -175,7 +200,7 @@ function persistLocalBackup() {
       localBackupKey,
       JSON.stringify({
         savedAt: new Date().toISOString(),
-        projects: state.projects,
+        employees: state.employees,
       })
     );
   } catch (error) {
@@ -183,13 +208,47 @@ function persistLocalBackup() {
   }
 }
 
-function shouldUseLocalBackup(localBackup, serverProjects) {
-  const localProjects = localBackup.projects || [];
-  const localStats = getProjectStats(localProjects);
-  const serverStats = getProjectStats(serverProjects);
+function persistActiveSelection() {
+  try {
+    localStorage.setItem(
+      activeSelectionKey,
+      JSON.stringify({
+        employeeId: state.activeEmployeeId,
+        projectId: state.activeProjectId,
+        noteId: state.activeNoteId,
+      })
+    );
+  } catch (error) {
+    // Selection restore is a convenience; notes still save normally.
+  }
+}
 
-  if (!localProjects.length) return false;
-  if (!serverProjects.length) return localStats.meaningfulTextLength > 20;
+function restoreActiveSelection() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(activeSelectionKey) || "{}");
+  } catch (error) {
+    saved = {};
+  }
+
+  const employee = state.employees.find((item) => item.id === saved.employeeId) || state.employees[0];
+  state.activeEmployeeId = employee?.id || null;
+
+  const projects = activeProjects();
+  const project = projects.find((item) => item.id === saved.projectId) || projects[0];
+  state.activeProjectId = project?.id || null;
+
+  const note = project?.notes?.find((item) => item.id === saved.noteId) || project?.notes?.[0];
+  state.activeNoteId = note?.id || null;
+}
+
+function shouldUseLocalBackup(localBackup, serverEmployees) {
+  const localEmployees = localBackup.employees || [];
+  const localStats = getEmployeeStats(localEmployees);
+  const serverStats = getEmployeeStats(serverEmployees);
+
+  if (!localEmployees.length) return false;
+  if (!serverEmployees.length) return localStats.meaningfulTextLength > 20;
 
   const localHasMoreProjects = localStats.projectCount > serverStats.projectCount;
   const localHasMoreNotes = localStats.noteCount > serverStats.noteCount;
@@ -198,6 +257,37 @@ function shouldUseLocalBackup(localBackup, serverProjects) {
   const serverLooksBlank = serverStats.meaningfulTextLength < 20;
 
   return localHasMoreProjects || localHasMoreNotes || (localHasAtLeastSameShape && localHasMoreContent && serverLooksBlank);
+}
+
+function normalizeEmployeesFromData(data) {
+  if (Array.isArray(data.employees)) {
+    return data.employees.map(normalizeEmployee);
+  }
+
+  const projects = Array.isArray(data.projects) ? data.projects.map(normalizeProject) : [];
+  return projects.length
+    ? [
+        {
+          id: uid("employee"),
+          name: "My Notes",
+          createdAt: new Date().toISOString(),
+          projects,
+        },
+      ]
+    : [];
+}
+
+function normalizeEmployee(employee) {
+  return {
+    id: String(employee.id || uid("employee")),
+    name: String(employee.name || "Employee"),
+    createdAt: String(employee.createdAt || new Date().toISOString()),
+    projects: (employee.projects || []).map(normalizeProject),
+  };
+}
+
+function getEmployeeStats(employees) {
+  return getProjectStats(employees.flatMap((employee) => employee.projects || []));
 }
 
 function latestProjectChange(projects) {
@@ -291,7 +381,7 @@ async function saveData(silent = false, options = {}) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        projects: state.projects,
+        employees: state.employees,
         allowDestructive: Boolean(options.allowDestructive),
       }),
     });
@@ -328,13 +418,13 @@ function scheduleSave() {
 }
 
 function saveBeforeUnload() {
-  if (!state.projects.length || !state.isDirty) return;
+  if (!state.employees.length || !state.isDirty) return;
 
   persistLocalBackup();
   clearTimeout(state.saveTimer);
 
   const payload = JSON.stringify({
-    projects: state.projects,
+    employees: state.employees,
     allowDestructive: state.allowDestructiveSave,
   });
   if (navigator.sendBeacon) {
@@ -366,23 +456,79 @@ function ensureProjectHasNote() {
 }
 
 function render() {
+  persistActiveSelection();
+  renderEmployees();
   renderProjects();
   renderProjectTabs();
+  renderSearchScope();
   renderEditor();
   renderTimeline();
+}
+
+function renderSearchScope() {
+  const previousValue = els.searchScope.value || "all";
+  els.searchScope.innerHTML = `<option value="all">All employees and projects</option>`;
+
+  allProjectsWithEmployees().forEach(({ employee, project }) => {
+    const option = document.createElement("option");
+    option.value = `project:${project.id}`;
+    option.textContent = `${employee.name} / ${projectLabel(project)}`;
+    els.searchScope.appendChild(option);
+  });
+
+  els.searchScope.value = [...els.searchScope.options].some((option) => option.value === previousValue) ? previousValue : "all";
+}
+
+function setActiveEmployee(employeeId) {
+  state.activeEmployeeId = employeeId;
+  const projects = activeProjects();
+  state.activeProjectId = projects[0]?.id || null;
+  state.activeNoteId = null;
+  els.searchInput.value = "";
+  ensureEmployeeHasProject();
+  ensureProjectHasNote();
+  persistActiveSelection();
+  render();
 }
 
 function setActiveProject(projectId) {
   state.activeProjectId = projectId;
   els.searchInput.value = "";
   ensureProjectHasNote();
+  persistActiveSelection();
   render();
+}
+
+function ensureEmployeeHasProject() {
+  const employee = activeEmployee();
+  if (!employee) return;
+  employee.projects = Array.isArray(employee.projects) ? employee.projects : [];
+  if (!employee.projects.length) {
+    const project = newProject("General", "Notes");
+    employee.projects.unshift(project);
+    state.activeProjectId = project.id;
+    scheduleSave();
+  }
+}
+
+function renderEmployees() {
+  els.employeeSelect.innerHTML = "";
+
+  state.employees.forEach((employee) => {
+    const option = document.createElement("option");
+    option.value = employee.id;
+    option.textContent = employee.name;
+    els.employeeSelect.appendChild(option);
+  });
+
+  els.employeeSelect.value = state.activeEmployeeId || "";
+  els.editEmployeeButton.disabled = !activeEmployee();
 }
 
 function renderProjects() {
   els.projectList.innerHTML = "";
 
-  state.projects.forEach((project) => {
+  activeProjects().forEach((project) => {
     const row = document.createElement("div");
     row.className = `project-row${project.id === state.activeProjectId ? " active" : ""}`;
 
@@ -413,7 +559,7 @@ function renderProjects() {
 function renderProjectTabs() {
   els.projectTabs.innerHTML = "";
 
-  state.projects.forEach((project) => {
+  activeProjects().forEach((project) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `project-tab${project.id === state.activeProjectId ? " active" : ""}`;
@@ -424,13 +570,14 @@ function renderProjectTabs() {
 }
 
 function renderEditor() {
+  const employee = activeEmployee();
   const project = activeProject();
   const note = activeNote();
   const label = project ? projectLabel(project) : "Select a project";
 
-  els.projectTitle.textContent = label;
-  els.projectHistoryTitle.textContent = project ? `All Notes For ${label}` : "All Notes For This Project";
-  els.noteHeader.textContent = note?.title || "Meeting Notes";
+  els.projectTitle.textContent = employee ? `${employee.name} - ${label}` : label;
+  els.projectHistoryTitle.textContent = project ? `All Notes For ${employee?.name || "Employee"} / ${label}` : "All Notes For This Project";
+  els.noteHeader.textContent = note?.title || "MA Notes";
   els.noteTitle.value = note?.title || "";
   els.noteDate.value = note?.date || today();
   els.meetingInPerson.checked = note?.meetingType === "In-Person";
@@ -492,6 +639,7 @@ function renderTimeline() {
     `;
     card.querySelector(".note-open").addEventListener("click", () => {
       state.activeNoteId = note.id;
+      persistActiveSelection();
       renderEditor();
       renderTimeline();
     });
@@ -977,7 +1125,7 @@ function updateActiveNote(field, value) {
   note.updatedAt = new Date().toISOString();
 
   if (field === "title") {
-    els.noteHeader.textContent = value || "Meeting Notes";
+    els.noteHeader.textContent = value || "MA Notes";
   }
 
   renderProjects();
@@ -1210,6 +1358,118 @@ function handleDiscussionInput() {
   updateActiveNote("discussion", text);
 }
 
+async function handleHandwrittenNotesUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  await processHandwrittenNotesFile(file);
+  event.target.value = "";
+}
+
+async function processHandwrittenNotesFile(file) {
+  const note = activeNote();
+  if (!note) {
+    return;
+  }
+
+  if (!file.type.startsWith("image/")) {
+    els.handwritingStatus.textContent = "Drop or upload an image file.";
+    return;
+  }
+
+  els.handwritingStatus.textContent = "Reading photo with AI...";
+  els.handwrittenNotesInput.disabled = true;
+
+  try {
+    const imageUrl = await readFileAsDataUrl(file);
+    const { text, method } = await recognizeImageText(imageUrl);
+    const cleanedText = cleanRecognizedNotes(text);
+
+    if (!cleanedText) {
+      els.handwritingStatus.textContent = "No readable text found. Try a brighter, closer photo.";
+      return;
+    }
+
+    pushDiscussionUndo();
+    const currentText = getDiscussionText();
+    const textToAdd = toBulletText(cleanedText);
+    const nextText = currentText.trim() && currentText.trim() !== "-" ? `${currentText.replace(/\s+$/, "")}\n${textToAdd}` : textToAdd;
+    renderDiscussionEditor(nextText, nextText.length);
+    updateActiveNote("discussion", nextText);
+    els.handwritingStatus.textContent = method === "ai"
+      ? "Added AI-read notes to Discussion."
+      : "Added OCR text to Discussion. For better handwriting results, run the local server with an OpenAI API key.";
+  } catch (error) {
+    els.handwritingStatus.textContent = error.message || "Could not read that photo.";
+  } finally {
+    els.handwrittenNotesInput.disabled = false;
+  }
+}
+
+async function recognizeImageText(imageUrl) {
+  const aiText = await recognizeImageTextWithAi(imageUrl);
+  if (aiText) return { text: aiText, method: "ai" };
+
+  throw new Error("AI handwriting reader is not connected. Start the local server and make sure your OpenAI API key is set up before uploading handwritten notes.");
+}
+
+async function recognizeImageTextWithAi(imageUrl) {
+  const endpoints = window.location.protocol === "file:"
+    ? ["http://localhost:4500/api/transcribe-notes"]
+    : ["/api/transcribe-notes", "http://localhost:4500/api/transcribe-notes"];
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: imageUrl }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.text) return data.text;
+      if (!response.ok && data.error) {
+        throw new Error(data.error);
+      }
+    } catch (error) {
+      if (error.message && !error.message.includes("Failed to fetch")) {
+        throw error;
+      }
+      // Try the next endpoint.
+    }
+  }
+
+  return "";
+}
+
+function cleanRecognizedNotes(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function handleHandwritingDragOver(event) {
+  event.preventDefault();
+  els.handwritingDropZone.classList.add("dragging");
+}
+
+function handleHandwritingDragLeave(event) {
+  if (!els.handwritingDropZone.contains(event.relatedTarget)) {
+    els.handwritingDropZone.classList.remove("dragging");
+  }
+}
+
+async function handleHandwritingDrop(event) {
+  event.preventDefault();
+  els.handwritingDropZone.classList.remove("dragging");
+  const file = [...(event.dataTransfer?.files || [])].find((item) => item.type.startsWith("image/"));
+  if (!file) {
+    els.handwritingStatus.textContent = "Drop an image file to read handwritten notes.";
+    return;
+  }
+  await processHandwrittenNotesFile(file);
+}
+
 function parseDiscussionItems(text) {
   const seen = new Set();
   return String(text || "")
@@ -1256,19 +1516,13 @@ function isClientDecisionLine(line) {
 }
 
 function createProject(clientName, projectName) {
+  const employee = activeEmployee();
   const trimmedClient = clientName.trim();
   const trimmedProject = projectName.trim();
-  if (!trimmedClient || !trimmedProject) return false;
+  if (!employee || !trimmedClient || !trimmedProject) return false;
 
-  const project = {
-    id: uid("project"),
-    clientName: trimmedClient,
-    projectName: trimmedProject,
-    name: `${trimmedClient} / ${trimmedProject}`,
-    createdAt: new Date().toISOString(),
-    notes: [],
-  };
-  state.projects.unshift(project);
+  const project = newProject(trimmedClient, trimmedProject);
+  employee.projects.unshift(project);
   state.activeProjectId = project.id;
   ensureProjectHasNote();
   render();
@@ -1277,26 +1531,91 @@ function createProject(clientName, projectName) {
 }
 
 function removeProject(projectId) {
-  const project = state.projects.find((item) => item.id === projectId);
+  const employee = activeEmployee();
+  if (!employee) return;
+
+  const project = employee.projects.find((item) => item.id === projectId);
   if (!project) return;
 
   const confirmed = window.confirm(`Remove "${projectLabel(project)}" and all notes in it?`);
   if (!confirmed) return;
 
   const removedActiveProject = state.activeProjectId === projectId;
-  state.projects = state.projects.filter((item) => item.id !== projectId);
+  employee.projects = employee.projects.filter((item) => item.id !== projectId);
 
   if (removedActiveProject) {
-    state.activeProjectId = state.projects[0]?.id || null;
+    state.activeProjectId = employee.projects[0]?.id || null;
     state.activeNoteId = null;
+    ensureEmployeeHasProject();
     ensureProjectHasNote();
   }
 
-  if (state.projects.length === 0) {
+  if (employee.projects.length === 0) {
     els.searchInput.value = "";
   }
 
   state.allowDestructiveSave = true;
+  render();
+  scheduleSave();
+}
+
+function createEmployee(name) {
+  const trimmedName = name.trim();
+  if (!trimmedName) return false;
+
+  const employee = newEmployee(trimmedName);
+  employee.projects.unshift(newProject("General", "Notes"));
+  state.employees.unshift(employee);
+  state.activeEmployeeId = employee.id;
+  state.activeProjectId = employee.projects[0].id;
+  ensureProjectHasNote();
+  render();
+  scheduleSave();
+  return true;
+}
+
+function removeEmployee(employeeId) {
+  const employee = state.employees.find((item) => item.id === employeeId);
+  if (!employee) return;
+
+  if (state.employees.length === 1) {
+    window.alert("Keep at least one employee workspace.");
+    return;
+  }
+
+  const confirmed = window.confirm(`Remove "${employee.name}" and all projects and notes in that employee workspace?`);
+  if (!confirmed) return;
+
+  const removedActiveEmployee = state.activeEmployeeId === employeeId;
+  state.employees = state.employees.filter((item) => item.id !== employeeId);
+
+  if (removedActiveEmployee) {
+    state.activeEmployeeId = state.employees[0]?.id || null;
+    state.activeProjectId = activeProjects()[0]?.id || null;
+    state.activeNoteId = null;
+    ensureEmployeeHasProject();
+    ensureProjectHasNote();
+  }
+
+  state.allowDestructiveSave = true;
+  render();
+  scheduleSave();
+}
+
+function renameActiveEmployee() {
+  const employee = activeEmployee();
+  if (!employee) return;
+
+  const nextName = window.prompt("Edit employee name", employee.name);
+  if (nextName === null) return;
+
+  const trimmedName = nextName.trim();
+  if (!trimmedName) {
+    window.alert("Employee name cannot be blank.");
+    return;
+  }
+
+  employee.name = trimmedName;
   render();
   scheduleSave();
 }
@@ -1335,11 +1654,11 @@ function readFileAsDataUrl(file) {
 
 async function askNotes() {
   const question = els.questionInput.value.trim();
-  const project = activeProject();
-  if (!question || !project) return;
+  const searchScope = els.searchScope.value;
+  if (!question) return;
 
   if (window.location.protocol === "file:") {
-    els.answerBox.textContent = buildLocalQuestionAnswer(project, question);
+    els.answerBox.textContent = buildLocalQuestionAnswer(question, searchScope);
     return;
   }
 
@@ -1352,7 +1671,7 @@ async function askNotes() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         question,
-        projectId: project.id,
+        projectId: searchScope.startsWith("project:") ? searchScope.slice("project:".length) : "",
       }),
     });
     const data = await response.json();
@@ -1363,41 +1682,56 @@ async function askNotes() {
 
     els.answerBox.textContent = data.answer;
   } catch (error) {
-    els.answerBox.textContent = buildLocalQuestionAnswer(project, question);
+    els.answerBox.textContent = buildLocalQuestionAnswer(question, searchScope);
   } finally {
     els.askButton.disabled = false;
   }
 }
 
-function buildLocalQuestionAnswer(project, question) {
+function buildLocalQuestionAnswer(question, searchScope = "all") {
   const terms = question
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter((term) => term.length > 2);
 
-  const matches = (project.notes || [])
-    .map((note) => {
+  const entries = getSearchEntries(searchScope);
+  const matches = entries
+    .map(({ employee, project, note }) => {
       const text = getNoteSearchText(note);
       const score = terms.reduce((count, term) => count + (text.toLowerCase().includes(term) ? 1 : 0), 0);
-      return { note, score, text };
+      return { employee, project, note, score, text };
     })
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, 4);
 
   if (!matches.length) {
-    return "AI answers are not connected in this version of the app.\n\nI did not find matching notes in this project yet.";
+    return `AI answers are not connected in this version of the app.\n\nI did not find matching notes ${searchScope.startsWith("project:") ? "in that project" : "across employees and projects"} yet.`;
   }
 
   return [
     "AI answers are not connected in this version of the app.",
     "",
-    "Best matches from this project:",
-    ...matches.map(({ note }) => {
+    `Best matches ${searchScope.startsWith("project:") ? "from that project" : "across employees and projects"}:`,
+    ...matches.map(({ employee, project, note }) => {
       const preview = String(note.discussion || note.finalReport || "No note details yet.").replace(/\s+/g, " ").trim();
-      return `- ${note.date || "No date"} - ${note.title || "Untitled meeting"}: ${preview.slice(0, 220)}${preview.length > 220 ? "..." : ""}`;
+      return `- ${employee.name} / ${projectLabel(project)} / ${note.date || "No date"} - ${note.title || "Untitled meeting"}: ${preview.slice(0, 220)}${preview.length > 220 ? "..." : ""}`;
     }),
   ].join("\n");
+}
+
+function getSearchEntries(searchScope = "all") {
+  if (searchScope.startsWith("project:")) {
+    const projectId = searchScope.slice("project:".length);
+    const match = allProjectsWithEmployees().find(({ project }) => project.id === projectId);
+    if (!match) return [];
+    const { employee, project } = match;
+    return (project.notes || []).map((note) => ({ employee, project, note }));
+  }
+
+  return state.employees.flatMap((employee) =>
+    (employee.projects || []).flatMap((project) => (project.notes || []).map((note) => ({ employee, project, note })))
+  );
 }
 
 async function archiveNotes() {
@@ -1429,23 +1763,31 @@ async function archiveNotes() {
 }
 
 function downloadLocalArchive() {
-  const content = state.projects.map(formatLocalArchiveProject).join("\n\n---\n\n");
+  const content = state.employees.map(formatLocalArchiveEmployee).join("\n\n---\n\n");
   const blob = new Blob([content || "No notes to archive."], { type: "text/markdown" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  link.download = `TC Notes Archive ${today()}.md`;
+  link.download = `MA Notes Archive ${today()}.md`;
   document.body.appendChild(link);
   link.click();
   link.remove();
   URL.revokeObjectURL(link.href);
 }
 
+function formatLocalArchiveEmployee(employee) {
+  return [
+    `# ${employee.name}`,
+    "",
+    ...(employee.projects || []).map(formatLocalArchiveProject),
+  ].join("\n");
+}
+
 function formatLocalArchiveProject(project) {
   return [
-    `# ${projectLabel(project)}`,
+    `## ${projectLabel(project)}`,
     "",
     ...(project.notes || []).map((note) => [
-      `## ${note.title || "Untitled meeting"}`,
+      `### ${note.title || "Untitled meeting"}`,
       "",
       `Date: ${note.date || "Not listed"}`,
       `Attendees: ${note.attendees || "Not listed"}`,
@@ -1487,7 +1829,25 @@ els.newProjectButton.addEventListener("click", () => {
   els.projectDialog.showModal();
   setTimeout(() => els.clientNameInput.focus(), 0);
 });
+els.newEmployeeButton.addEventListener("click", () => {
+  els.employeeNameInput.value = "";
+  els.employeeDialog.showModal();
+  setTimeout(() => els.employeeNameInput.focus(), 0);
+});
+els.employeeSelect.addEventListener("change", (event) => setActiveEmployee(event.target.value));
+els.editEmployeeButton.addEventListener("click", renameActiveEmployee);
 els.archiveNotesButton.addEventListener("click", archiveNotes);
+
+els.cancelEmployeeButton.addEventListener("click", () => {
+  els.employeeDialog.close();
+});
+
+els.employeeForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (createEmployee(els.employeeNameInput.value)) {
+    els.employeeDialog.close();
+  }
+});
 
 els.cancelProjectButton.addEventListener("click", () => {
   els.projectDialog.close();
@@ -1500,7 +1860,6 @@ els.projectForm.addEventListener("submit", (event) => {
   }
 });
 
-els.themeToggleButton.addEventListener("click", toggleTheme);
 els.newNoteButton.addEventListener("click", createNote);
 els.noteTitle.addEventListener("input", (event) => updateActiveNote("title", event.target.value));
 els.noteDate.addEventListener("input", (event) => updateActiveNote("date", event.target.value));
@@ -1519,6 +1878,10 @@ els.noteDiscussion.addEventListener("beforeinput", handleDiscussionBeforeInput);
 els.noteDiscussion.addEventListener("keydown", handleBulletKeydown);
 els.noteDiscussion.addEventListener("paste", handleBulletPaste);
 els.noteDiscussion.addEventListener("input", handleDiscussionInput);
+els.handwrittenNotesInput.addEventListener("change", handleHandwrittenNotesUpload);
+els.handwritingDropZone.addEventListener("dragover", handleHandwritingDragOver);
+els.handwritingDropZone.addEventListener("dragleave", handleHandwritingDragLeave);
+els.handwritingDropZone.addEventListener("drop", handleHandwritingDrop);
 els.searchInput.addEventListener("input", renderTimeline);
 els.askButton.addEventListener("click", askNotes);
 els.createReportButton.addEventListener("click", createFinalReport);
@@ -1532,7 +1895,6 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-applySavedTheme();
 loadData().catch((error) => {
   els.answerBox.textContent = `The dashboard could not load notes: ${error.message}`;
 });

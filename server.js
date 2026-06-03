@@ -23,6 +23,12 @@ const contentTypes = {
 
 const server = http.createServer(async (req, res) => {
   try {
+    if (req.method === "OPTIONS") {
+      writeCorsHeaders(res, 204, {});
+      res.end();
+      return;
+    }
+
     const url = new URL(req.url, `http://${req.headers.host}`);
 
     if (url.pathname === "/api/notes" && req.method === "GET") {
@@ -49,6 +55,12 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, await createReport(parsed.projectId, parsed.noteId));
     }
 
+    if (url.pathname === "/api/transcribe-notes" && req.method === "POST") {
+      const body = await readBody(req, 35_000_000);
+      const parsed = JSON.parse(body || "{}");
+      return sendJson(res, await transcribeHandwrittenNotes(parsed.image));
+    }
+
     if (url.pathname === "/api/archive" && req.method === "POST") {
       return sendJson(res, await archiveAllNotes());
     }
@@ -63,7 +75,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const parsed = JSON.parse(body || "{}");
       const pdf = await createReportPdf(parsed.projectId, parsed.noteId);
-      res.writeHead(200, {
+      writeCorsHeaders(res, 200, {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="${pdf.fileName}"`,
       });
@@ -78,7 +90,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, () => {
-  console.log(`TC Notes Dashboard is running at http://localhost:${port}`);
+  console.log(`MA Notes is running at http://localhost:${port}`);
 });
 
 module.exports = server;
@@ -113,43 +125,104 @@ async function writeNotes(data, options = {}) {
 }
 
 function normalizeData(data) {
-  const projects = Array.isArray(data.projects) ? data.projects : [];
+  const employees = Array.isArray(data.employees)
+    ? data.employees.map((employee) => ({
+        id: String(employee.id || ""),
+        name: String(employee.name || "Employee"),
+        createdAt: String(employee.createdAt || new Date().toISOString()),
+        projects: (employee.projects || []).map(normalizeProject),
+      }))
+    : [];
+  const legacyProjects = Array.isArray(data.projects) ? data.projects.map(normalizeProject) : [];
+  const normalizedEmployees = employees.length
+    ? employees
+    : legacyProjects.length
+      ? [
+          {
+            id: "employee-default",
+            name: "My Notes",
+            createdAt: new Date().toISOString(),
+            projects: legacyProjects,
+          },
+        ]
+      : [];
+  const projects = normalizedEmployees.flatMap((employee) => employee.projects);
+
   return {
-    projects: projects.map((project) => ({
-      id: String(project.id || ""),
-      clientName: String(project.clientName || ""),
-      projectName: String(project.projectName || project.name || "Untitled project"),
-      name: String(project.name || formatProjectName(project)),
-      createdAt: String(project.createdAt || new Date().toISOString()),
-      notes: Array.isArray(project.notes)
-        ? project.notes.map((note) => ({
-            id: String(note.id || ""),
-            title: String(note.title || "Untitled meeting"),
-            date: String(note.date || ""),
-            meetingType: String(note.meetingType || ""),
-            attendees: String(note.attendees || ""),
-            attendeeImage: String(note.attendeeImage || ""),
-            discussion: String(note.discussion || note.body || ""),
-            actionItems: Array.isArray(note.actionItems) ? note.actionItems.map(String) : [],
-            completedActionItems: Array.isArray(note.completedActionItems) ? note.completedActionItems.map(String) : [],
-            decisionItems: Array.isArray(note.decisionItems) ? note.decisionItems.map(String) : parseLines(note.decisions),
-            finalReport: String(note.finalReport || ""),
-            createdAt: String(note.createdAt || new Date().toISOString()),
-            updatedAt: String(note.updatedAt || new Date().toISOString()),
-          }))
-        : [],
-    })),
+    employees: normalizedEmployees,
+    projects,
+  };
+}
+
+function normalizeProject(project) {
+  return {
+    id: String(project.id || ""),
+    clientName: String(project.clientName || ""),
+    projectName: String(project.projectName || project.name || "Untitled project"),
+    name: String(project.name || formatProjectName(project)),
+    createdAt: String(project.createdAt || new Date().toISOString()),
+    notes: Array.isArray(project.notes)
+      ? project.notes.map((note) => ({
+          id: String(note.id || ""),
+          title: String(note.title || "Untitled meeting"),
+          date: String(note.date || ""),
+          meetingType: String(note.meetingType || ""),
+          attendees: String(note.attendees || ""),
+          attendeeImage: String(note.attendeeImage || ""),
+          discussion: String(note.discussion || note.body || ""),
+          actionItems: Array.isArray(note.actionItems) ? note.actionItems.map(String) : [],
+          completedActionItems: Array.isArray(note.completedActionItems) ? note.completedActionItems.map(String) : [],
+          decisionItems: Array.isArray(note.decisionItems) ? note.decisionItems.map(String) : parseLines(note.decisions),
+          finalReport: String(note.finalReport || ""),
+          createdAt: String(note.createdAt || new Date().toISOString()),
+          updatedAt: String(note.updatedAt || new Date().toISOString()),
+        }))
+      : [],
   };
 }
 
 function mergeWithoutDeleting(current, incoming) {
+  if ((current.employees || []).length || (incoming.employees || []).length) {
+    const employees = new Map();
+
+    (current.employees || []).forEach((employee) => {
+      employees.set(employee.id, employee);
+    });
+
+    (incoming.employees || []).forEach((incomingEmployee) => {
+      const currentEmployee = employees.get(incomingEmployee.id);
+      if (!currentEmployee) {
+        employees.set(incomingEmployee.id, incomingEmployee);
+        return;
+      }
+
+      employees.set(incomingEmployee.id, {
+        ...currentEmployee,
+        ...incomingEmployee,
+        projects: mergeProjectsWithoutDeleting(currentEmployee.projects || [], incomingEmployee.projects || []),
+      });
+    });
+
+    const mergedEmployees = [...employees.values()];
+    return {
+      employees: mergedEmployees,
+      projects: mergedEmployees.flatMap((employee) => employee.projects || []),
+    };
+  }
+
+  return {
+    projects: mergeProjectsWithoutDeleting(current.projects || [], incoming.projects || []),
+  };
+}
+
+function mergeProjectsWithoutDeleting(currentProjectList, incomingProjectList) {
   const projects = new Map();
 
-  current.projects.forEach((project) => {
+  currentProjectList.forEach((project) => {
     projects.set(project.id, project);
   });
 
-  incoming.projects.forEach((incomingProject) => {
+  incomingProjectList.forEach((incomingProject) => {
     const currentProject = projects.get(incomingProject.id);
     if (!currentProject) {
       projects.set(incomingProject.id, incomingProject);
@@ -163,7 +236,7 @@ function mergeWithoutDeleting(current, incoming) {
     });
   });
 
-  return { projects: [...projects.values()] };
+  return [...projects.values()];
 }
 
 function mergeNotesWithoutWiping(currentNotes, incomingNotes) {
@@ -290,14 +363,21 @@ async function askQuestion(question, projectId) {
   }
 
   const data = await readNotes();
-  const project = data.projects.find((item) => item.id === projectId);
-  if (!project) {
-    throw new Error("Choose a project first.");
+  const projects = projectId ? data.projects.filter((item) => item.id === projectId) : data.projects;
+  if (!projects.length) {
+    throw new Error("No projects are available to search.");
   }
 
-  const context = project.notes
-    .map((note) => {
+  const context = projects
+    .flatMap((project) =>
+      project.notes.map((note) => ({
+        project,
+        note,
+      }))
+    )
+    .map(({ project, note }) => {
       return [
+        `Project: ${formatProjectName(project)}`,
         `Title: ${note.title}`,
         `Date: ${note.date}`,
         `Meeting type: ${note.meetingType || "Not listed"}`,
@@ -414,6 +494,51 @@ async function createReport(projectId, noteId) {
   };
 }
 
+async function transcribeHandwrittenNotes(image) {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("Handwriting transcription needs an OpenAI API key.");
+  }
+
+  const imageUrl = String(image || "");
+  if (!imageUrl.startsWith("data:image/")) {
+    throw new Error("Upload an image first.");
+  }
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_VISION_MODEL || "gpt-4o",
+      input: [
+        {
+          role: "system",
+          content:
+            "Transcribe handwritten meeting notes from images. Preserve short bullet-style lines. Use -* at the start of action item lines when a star or action marker appears. Use -** only for clear client decisions. Do not invent text. If a word is unclear, use [unclear]. Return only the notes text.",
+        },
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: "Read this handwritten notes photo and return clean note lines." },
+            { type: "input_image", image_url: imageUrl },
+          ],
+        },
+      ],
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error?.message || "Could not transcribe handwritten notes.");
+  }
+
+  return {
+    text: extractResponseText(data),
+  };
+}
+
 async function archiveAllNotes() {
   const data = await readNotes();
   await fs.mkdir(archiveDir, { recursive: true });
@@ -421,16 +546,22 @@ async function archiveAllNotes() {
   let noteCount = 0;
   let projectCount = 0;
 
-  for (const project of data.projects) {
-    const projectFolder = path.join(archiveDir, sanitizePathSegment(formatProjectName(project)));
-    await fs.mkdir(projectFolder, { recursive: true });
-    projectCount += 1;
+  const employees = data.employees?.length ? data.employees : [{ name: "My Notes", projects: data.projects }];
 
-    for (const [index, note] of project.notes.entries()) {
-      const fileName = buildArchiveFileName(note, index);
-      const filePath = path.join(projectFolder, fileName);
-      await fs.writeFile(filePath, formatArchiveMarkdown(project, note), "utf8");
-      noteCount += 1;
+  for (const employee of employees) {
+    const employeeFolder = path.join(archiveDir, sanitizePathSegment(employee.name || "Employee"));
+
+    for (const project of employee.projects || []) {
+      const projectFolder = path.join(employeeFolder, sanitizePathSegment(formatProjectName(project)));
+      await fs.mkdir(projectFolder, { recursive: true });
+      projectCount += 1;
+
+      for (const [index, note] of project.notes.entries()) {
+        const fileName = buildArchiveFileName(note, index);
+        const filePath = path.join(projectFolder, fileName);
+        await fs.writeFile(filePath, formatArchiveMarkdown(project, note), "utf8");
+        noteCount += 1;
+      }
     }
   }
 
@@ -765,12 +896,12 @@ function loadEnv() {
   });
 }
 
-function readBody(req) {
+function readBody(req, maxLength = 15_000_000) {
   return new Promise((resolve, reject) => {
     let body = "";
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 15_000_000) {
+      if (body.length > maxLength) {
         req.destroy();
         reject(new Error("Request is too large."));
       }
@@ -798,6 +929,15 @@ async function serveStatic(requestPath, res) {
 }
 
 function sendJson(res, data, status = 200) {
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  writeCorsHeaders(res, status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(data));
+}
+
+function writeCorsHeaders(res, status, headers = {}) {
+  res.writeHead(status, {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    ...headers,
+  });
 }
