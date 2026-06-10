@@ -81,7 +81,7 @@
         </details>
 
         <section class="notes-layout">
-          <div class="notes-panel">
+          <div class="notes-panel note-details-panel">
             <div class="panel-header">
               <div>
                 <p class="eyebrow">Notes</p>
@@ -130,11 +130,16 @@
                   </div>
                 </div>
               </details>
+            </div>
+          </div>
+
+          <div class="notes-panel meeting-notes-panel">
+            <div class="note-fields">
               <div class="full-span discussion-field">
-                <span>Discussion</span>
-                <div class="discussion-key" aria-label="Discussion note markers">
-                  <span><strong>-*</strong> Action Item</span>
-                  <span><strong>-**</strong> Client Decision</span>
+                <span>Meeting Notes</span>
+                <div class="discussion-key" aria-label="Meeting note markers">
+                  <span><strong>*</strong> Action Item</span>
+                  <span><strong>**</strong> Client Decision</span>
                 </div>
                 <details class="handwriting-details">
                   <summary>
@@ -144,7 +149,7 @@
                   <div class="handwriting-upload" id="handwritingDropZone" tabindex="0">
                     <div>
                       <strong>Upload handwritten notes</strong>
-                      <span>Upload or drag a photo here to add recognized text to Discussion.</span>
+                      <span>Upload or drag a photo here to add recognized text to Meeting Notes.</span>
                     </div>
                     <label class="secondary-button handwriting-button">
                       Upload Photo
@@ -153,26 +158,55 @@
                     <div class="handwriting-status" id="handwritingStatus"></div>
                   </div>
                 </details>
-                <div id="noteDiscussion" class="discussion-editor-box" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="- Type notes here. Use -* for action items and -** for client decisions."></div>
+                <div class="meeting-toolbar" aria-label="Meeting notes formatting">
+                  <button type="button" class="toolbar-button" data-format-command="bold" title="Bold"><strong>B</strong></button>
+                  <button type="button" class="toolbar-button" data-format-command="italic" title="Italic"><em>I</em></button>
+                  <button type="button" class="toolbar-button" data-format-command="underline" title="Underline"><u>U</u></button>
+                  <span class="toolbar-divider" aria-hidden="true"></span>
+                  <button type="button" class="toolbar-button" data-format-command="bullet" title="Bullet">Bullet</button>
+                  <button type="button" class="toolbar-button" data-format-command="outdent" title="Decrease indent">Outdent</button>
+                  <button type="button" class="toolbar-button" data-format-command="indent" title="Increase indent">Indent</button>
+                  <span class="toolbar-divider" aria-hidden="true"></span>
+                  <button type="button" class="toolbar-button" data-font-size="decrease" title="Decrease font size">A-</button>
+                  <button type="button" class="toolbar-button" data-font-size="increase" title="Increase font size">A+</button>
+                  <span class="toolbar-divider" aria-hidden="true"></span>
+                  <button type="button" class="toolbar-button" id="autoCorrectButton" title="Auto correct notes">Auto Correct</button>
+                </div>
+                <div id="noteDiscussion" class="discussion-editor-box" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Type notes here. Use * for action items and ** for client decisions."></div>
+              </div>
+
+              <div class="report-panel full-span">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">AI Organizer</p>
+                    <h3>Final Report</h3>
+                  </div>
+                  <div class="report-actions">
+                    <button class="secondary-button" id="emailReportButton" type="button">Email Report</button>
+                    <button class="secondary-button" id="downloadReportButton" type="button">Download Report</button>
+                    <button class="secondary-button" id="downloadActionItemsButton" type="button">Download Action Items</button>
+                    <button class="primary-button" id="createReportButton" type="button">Create Report</button>
+                  </div>
+                </div>
+
+                <div class="report-box" id="finalReport">Final report will appear here after your notes are done.</div>
               </div>
             </div>
           </div>
 
-          <div class="lists-panel">
+          <div class="lists-panel screenshot-panel">
             <div class="panel-header">
               <div>
-                <p class="eyebrow">AI Organizer</p>
-                <h3>Final Report</h3>
-              </div>
-              <div class="report-actions">
-                <button class="secondary-button" id="emailReportButton" type="button">Email Report</button>
-                <button class="secondary-button" id="downloadReportButton" type="button">Download Report</button>
-                <button class="secondary-button" id="downloadActionItemsButton" type="button">Download Action Items</button>
-                <button class="primary-button" id="createReportButton" type="button">Create Report</button>
+                <p class="eyebrow">Screenshots</p>
+                <h3>Paste Screenshots</h3>
               </div>
             </div>
 
-            <div class="report-box" id="finalReport">Final report will appear here after your notes are done.</div>
+            <div class="screenshot-paste-zone" id="screenshotPasteZone" tabindex="0">
+              <strong>Paste screenshots here</strong>
+              <span>Click this area, then paste a screenshot from your clipboard.</span>
+              <div class="screenshot-gallery" id="screenshotGallery"></div>
+            </div>
           </div>
         </section>
 
@@ -219,6 +253,11 @@
           <button class="primary-button" id="createEmployeeConfirm" value="default" type="submit">Create</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="screenshotDialog" class="screenshot-dialog">
+      <button class="secondary-button" id="closeScreenshotDialog" type="button">Close</button>
+      <img id="screenshotDialogImage" alt="Enlarged pasted screenshot" />
     </dialog>
 
     <script src="app.js"></script>

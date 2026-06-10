@@ -49,6 +49,15 @@ const els = {
   handwrittenNotesInput: document.getElementById("handwrittenNotesInput"),
   handwritingStatus: document.getElementById("handwritingStatus"),
   noteDiscussion: document.getElementById("noteDiscussion"),
+  meetingToolbar: document.querySelector(".meeting-toolbar"),
+  formatButtons: [...document.querySelectorAll("[data-format-command]")],
+  fontSizeButtons: [...document.querySelectorAll("[data-font-size]")],
+  autoCorrectButton: document.getElementById("autoCorrectButton"),
+  screenshotPasteZone: document.getElementById("screenshotPasteZone"),
+  screenshotGallery: document.getElementById("screenshotGallery"),
+  screenshotDialog: document.getElementById("screenshotDialog"),
+  screenshotDialogImage: document.getElementById("screenshotDialogImage"),
+  closeScreenshotDialog: document.getElementById("closeScreenshotDialog"),
   createReportButton: document.getElementById("createReportButton"),
   emailReportButton: document.getElementById("emailReportButton"),
   downloadReportButton: document.getElementById("downloadReportButton"),
@@ -63,6 +72,8 @@ const els = {
   noteCount: document.getElementById("noteCount"),
   projectHistoryTitle: document.getElementById("projectHistoryTitle"),
 };
+
+let savedDiscussionSelection = null;
 
 function uid(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -131,7 +142,10 @@ function newNote() {
     meetingType: "",
     attendees: "",
     attendeeImage: "",
-    discussion: "- ",
+    screenshots: [],
+    discussion: "",
+    discussionHtml: "",
+    discussionFontSize: 16,
     actionItems: [],
     completedActionItems: [],
     decisionItems: [],
@@ -354,13 +368,16 @@ function normalizeNote(note) {
   return {
     ...newNote(),
     ...note,
-    discussion: toBulletText(note.discussion || note.body || ""),
+    discussion: String(note.discussion || note.body || ""),
     actionItems,
     completedActionItems,
     decisionItems,
     finalReport: note.finalReport || "",
     meetingType: note.meetingType || "",
     attendeeImage: note.attendeeImage || "",
+    screenshots: Array.isArray(note.screenshots) ? note.screenshots : [],
+    discussionHtml: note.discussionHtml || "",
+    discussionFontSize: Number(note.discussionFontSize) || 16,
   };
 }
 
@@ -583,21 +600,63 @@ function renderEditor() {
   els.meetingInPerson.checked = note?.meetingType === "In-Person";
   els.meetingVirtual.checked = note?.meetingType === "Virtual";
   els.noteAttendees.value = note?.attendees || "";
-  renderDiscussionEditor(note?.discussion || "");
+  renderDiscussionEditor(note?.discussion || "", null, note?.discussionHtml || "");
+  applyDiscussionFontSize(note?.discussionFontSize || 16);
   state.discussionUndoStack = [];
   renderFinalReport(note);
   renderAttendeeImage(note?.attendeeImage || "");
+  renderScreenshots(note?.screenshots || []);
 
   const hasProject = Boolean(project);
   [els.newNoteButton, els.noteTitle, els.noteDate, els.meetingInPerson, els.meetingVirtual, els.noteAttendees, els.askButton, els.createReportButton, els.emailReportButton, els.downloadReportButton, els.downloadActionItemsButton].forEach((el) => {
     el.disabled = !hasProject;
   });
   els.noteDiscussion.setAttribute("contenteditable", hasProject ? "true" : "false");
+  els.formatButtons.forEach((button) => {
+    button.disabled = !hasProject;
+  });
+  els.fontSizeButtons.forEach((button) => {
+    button.disabled = !hasProject;
+  });
+  els.autoCorrectButton.disabled = !hasProject;
 }
 
 function renderAttendeeImage(src) {
   els.attendeeImagePreview.src = src;
   els.attendeePasteZone.classList.toggle("has-image", Boolean(src));
+}
+
+function renderScreenshots(screenshots = []) {
+  els.screenshotGallery.innerHTML = "";
+  els.screenshotPasteZone.classList.toggle("has-screenshots", screenshots.length > 0);
+
+  screenshots.forEach((src, index) => {
+    const item = document.createElement("figure");
+    item.className = "screenshot-item";
+    item.innerHTML = `
+      <img src="${escapeHtml(src)}" alt="Pasted screenshot ${index + 1}" />
+      <button class="secondary-button" type="button">Remove</button>
+    `;
+    item.querySelector("img").addEventListener("click", (event) => {
+      event.stopPropagation();
+      openScreenshot(src);
+    });
+    item.querySelector("button").addEventListener("click", (event) => {
+      event.stopPropagation();
+      removeScreenshot(index);
+    });
+    els.screenshotGallery.appendChild(item);
+  });
+}
+
+function openScreenshot(src) {
+  els.screenshotDialogImage.src = src;
+  els.screenshotDialog.showModal();
+}
+
+function closeScreenshot() {
+  els.screenshotDialog.close();
+  els.screenshotDialogImage.src = "";
 }
 
 function renderTimeline() {
@@ -789,7 +848,11 @@ function renderReportList(items) {
 
   items.forEach((value) => {
     const item = document.createElement("li");
-    item.textContent = value;
+    const indentSize = getReportItemIndent(value).replace(/\t/g, "  ").length;
+    item.textContent = String(value || "").trim();
+    if (indentSize) {
+      item.style.marginLeft = `${Math.min(indentSize * 12, 72)}px`;
+    }
     list.appendChild(item);
   });
 
@@ -922,7 +985,7 @@ function downloadActionItems() {
   const actionItems = note.actionItems?.length ? note.actionItems : parsed.actionItems;
 
   if (!actionItems.length) {
-    window.alert("No action items found. Use -* at the start of a note line to mark an action item.");
+    window.alert("No action items found. Use * at the start of a note line to mark an action item.");
     return;
   }
 
@@ -1061,7 +1124,7 @@ function formatEmailChecklist(items, completed) {
 }
 
 function formatEmailList(items) {
-  return items.length ? items.map((item) => `- ${item}`).join("\n") : "None noted";
+  return items.length ? items.map((item) => `${getReportItemIndent(item)}- ${String(item).trim()}`).join("\n") : "None noted";
 }
 
 function parseLocalReportNotes(discussion) {
@@ -1071,15 +1134,15 @@ function parseLocalReportNotes(discussion) {
 
   String(discussion || "")
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
+    .filter((line) => line.trim())
     .forEach((line) => {
-      if (isClientDecisionLine(line)) {
-        clientDecisions.push(cleanLocalMarkedLine(line.replace(/^-?\s*\*\*/, "")));
-      } else if (isActionItemLine(line)) {
-        actionItems.push(cleanLocalMarkedLine(line.replace(/^-?\s*\*/, "")));
+      const trimmedLine = line.trim();
+      if (isClientDecisionLine(trimmedLine)) {
+        clientDecisions.push(cleanLocalMarkedLine(trimmedLine.replace(/^-?\s*\*\*/, "")));
+      } else if (isActionItemLine(trimmedLine)) {
+        actionItems.push(cleanLocalMarkedLine(trimmedLine.replace(/^-?\s*\*/, "")));
       } else {
-        notes.push(cleanLocalMarkedLine(line));
+        notes.push(cleanLocalNoteLine(line));
       }
     });
 
@@ -1092,6 +1155,13 @@ function parseLocalReportNotes(discussion) {
 
 function cleanLocalMarkedLine(value) {
   return String(value || "").replace(/^[-*\u2022\d.)\s]+/, "").trim();
+}
+
+function cleanLocalNoteLine(value) {
+  const line = String(value || "");
+  const indent = line.match(/^\s*/)?.[0] || "";
+  const text = line.slice(indent.length).replace(/^[-\u2022\d.)]+\s*/, "").trim();
+  return text ? `${indent}${text}` : "";
 }
 
 function buildLocalReport(project, note, parsed) {
@@ -1114,7 +1184,11 @@ function buildLocalReport(project, note, parsed) {
 }
 
 function formatLocalList(items) {
-  return items.length ? items.map((item) => `- ${item}`).join("\n") : "- None noted";
+  return items.length ? items.map((item) => `${getReportItemIndent(item)}- ${String(item).trim()}`).join("\n") : "- None noted";
+}
+
+function getReportItemIndent(item) {
+  return String(item || "").match(/^\s*/)?.[0] || "";
 }
 
 function updateActiveNote(field, value) {
@@ -1140,12 +1214,33 @@ function updateMeetingType(type, checked) {
 }
 
 function getDiscussionText() {
-  const lines = [...els.noteDiscussion.querySelectorAll(".discussion-line")].map((line) => line.textContent);
+  const lines = getDiscussionLineElements().map((line) => line.textContent);
   return lines.length ? lines.join("\n") : els.noteDiscussion.textContent;
 }
 
-function renderDiscussionEditor(text, caretOffset = null) {
+function getDiscussionLineElements() {
+  const discussionLines = [...els.noteDiscussion.querySelectorAll(".discussion-line")];
+  if (discussionLines.length) return discussionLines;
+
+  return [...els.noteDiscussion.children].filter((child) => ["DIV", "P"].includes(child.tagName));
+}
+
+function renderDiscussionEditor(text, caretOffset = null, html = "") {
   state.isRenderingDiscussion = true;
+  if (html) {
+    els.noteDiscussion.innerHTML = sanitizeDiscussionHtml(html);
+    if (!els.noteDiscussion.querySelector(".discussion-line")) {
+      const restoredText = getDiscussionText();
+      renderDiscussionEditor(restoredText || text, caretOffset);
+      return;
+    }
+    if (caretOffset !== null) {
+      setDiscussionCaret(caretOffset);
+    }
+    state.isRenderingDiscussion = false;
+    return;
+  }
+
   const lines = String(text || "").split(/\r?\n/);
   els.noteDiscussion.innerHTML = lines.map((line) => {
     const isIndented = /^\s+/.test(line);
@@ -1159,6 +1254,50 @@ function renderDiscussionEditor(text, caretOffset = null) {
     setDiscussionCaret(caretOffset);
   }
   state.isRenderingDiscussion = false;
+}
+
+function sanitizeDiscussionHtml(html) {
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = String(html || "");
+  wrapper.querySelectorAll("script, style, iframe, object, embed").forEach((node) => node.remove());
+
+  [...wrapper.querySelectorAll("*")].forEach((node) => {
+    const allowedTags = ["DIV", "BR", "B", "STRONG", "I", "EM", "U", "SPAN"];
+    if (!allowedTags.includes(node.tagName)) {
+      node.replaceWith(...node.childNodes);
+      return;
+    }
+
+    [...node.attributes].forEach((attribute) => {
+      if (attribute.name !== "class") node.removeAttribute(attribute.name);
+    });
+
+    if (node.className && !String(node.className).split(/\s+/).every((name) => ["discussion-line", "top-level", "indented"].includes(name))) {
+      node.removeAttribute("class");
+    }
+  });
+
+  return wrapper.innerHTML;
+}
+
+function saveDiscussionFromEditor() {
+  const note = activeNote();
+  if (!note) return;
+
+  note.discussion = getDiscussionText();
+  note.discussionHtml = sanitizeDiscussionHtml(els.noteDiscussion.innerHTML);
+  note.updatedAt = new Date().toISOString();
+
+  renderProjects();
+  renderProjectTabs();
+  renderTimeline();
+  scheduleSave();
+}
+
+function applyDiscussionFontSize(size) {
+  const normalized = Math.min(22, Math.max(14, Number(size) || 16));
+  els.noteDiscussion.style.fontSize = `${normalized}px`;
+  els.noteDiscussion.style.lineHeight = "1.55";
 }
 
 function getDiscussionCaret() {
@@ -1216,11 +1355,12 @@ function setDiscussionCaret(offset) {
   let remaining = Math.max(0, offset);
 
   for (const line of lines) {
-    const textNode = [...line.childNodes].find((node) => node.nodeType === Node.TEXT_NODE);
-    const length = textNode?.textContent.length || 0;
+    const textNodes = getTextNodes(line);
+    const length = line.textContent.length || 0;
     if (remaining <= length) {
+      const target = findTextNodeAtOffset(textNodes, remaining);
       const range = document.createRange();
-      range.setStart(textNode || line, textNode ? remaining : 0);
+      range.setStart(target.node || line, target.node ? target.offset : 0);
       range.collapse(true);
       const selection = window.getSelection();
       selection.removeAllRanges();
@@ -1238,11 +1378,49 @@ function setDiscussionCaret(offset) {
   selection.addRange(range);
 }
 
+function getTextNodes(element) {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  let node = walker.nextNode();
+  while (node) {
+    nodes.push(node);
+    node = walker.nextNode();
+  }
+  return nodes;
+}
+
+function findTextNodeAtOffset(nodes, offset) {
+  let remaining = Math.max(0, offset);
+  for (const node of nodes) {
+    const length = node.textContent.length;
+    if (remaining <= length) {
+      return { node, offset: remaining };
+    }
+    remaining -= length;
+  }
+  const last = nodes[nodes.length - 1];
+  return last ? { node: last, offset: last.textContent.length } : { node: null, offset: 0 };
+}
+
+function saveDiscussionSelection() {
+  const selection = window.getSelection();
+  if (!selection.rangeCount || !els.noteDiscussion.contains(selection.anchorNode)) return;
+  savedDiscussionSelection = selection.getRangeAt(0).cloneRange();
+}
+
+function restoreDiscussionSelection() {
+  if (!savedDiscussionSelection) return;
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(savedDiscussionSelection);
+}
+
 function replaceDiscussionText(start, end, insert) {
   const value = getDiscussionText();
   const next = `${value.slice(0, start)}${insert}${value.slice(end)}`;
   renderDiscussionEditor(next, start + insert.length);
   updateActiveNote("discussion", next);
+  updateActiveNote("discussionHtml", sanitizeDiscussionHtml(els.noteDiscussion.innerHTML));
 }
 
 function pushDiscussionUndo() {
@@ -1260,13 +1438,7 @@ function undoDiscussionEdit() {
   if (previous === undefined) return;
   renderDiscussionEditor(previous, previous.length);
   updateActiveNote("discussion", previous);
-}
-
-function setBulletCaret(textarea) {
-  const value = getDiscussionText();
-  if (value.trim()) return;
-  renderDiscussionEditor("- ", 2);
-  updateActiveNote("discussion", "- ");
+  updateActiveNote("discussionHtml", sanitizeDiscussionHtml(els.noteDiscussion.innerHTML));
 }
 
 function handleBulletKeydown(event) {
@@ -1283,19 +1455,54 @@ function handleBulletKeydown(event) {
 
   if (event.key !== "Enter") return;
 
-  event.preventDefault();
-  pushDiscussionUndo();
   const value = getDiscussionText();
   const start = getDiscussionCaret();
-  const end = start;
-  const before = value.slice(0, start);
-  const currentLine = before.split("\n").pop();
-  const indent = currentLine.match(/^\s*/)?.[0] || "";
-  const trimmedLine = currentLine.trim();
-  const currentMarker = getLineMarker(trimmedLine);
-  const insert = ["-", "*", ">"].includes(trimmedLine) ? "\n" : `\n${indent}${currentMarker} `;
+  const line = getLineAtOffset(value, start);
+  const bullet = getBulletMatch(line.text);
 
-  replaceDiscussionText(start, end, insert);
+  if (!bullet) {
+    return;
+  }
+
+  event.preventDefault();
+  pushDiscussionUndo();
+
+  if (!bullet.body.trim()) {
+    const next = `${value.slice(0, line.start)}${value.slice(start)}`;
+    renderDiscussionEditor(next, line.start);
+    updateActiveNote("discussion", next);
+    updateActiveNote("discussionHtml", sanitizeDiscussionHtml(els.noteDiscussion.innerHTML));
+    return;
+  }
+
+  replaceDiscussionText(start, start, `\n${bullet.indent}${getNextBulletMarker(bullet.marker)} `);
+}
+
+function getLineAtOffset(value, offset) {
+  const start = value.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+  const endIndex = value.indexOf("\n", offset);
+  const end = endIndex === -1 ? value.length : endIndex;
+  return {
+    start,
+    end,
+    text: value.slice(start, end),
+  };
+}
+
+function getBulletMatch(line) {
+  const match = String(line || "").match(/^(\s*)(-\*\*|-\*|\*\*|\*|[-\u2022>]|\d+[.)])\s+(.*)$/);
+  if (!match) return null;
+  return {
+    indent: match[1] || "",
+    marker: match[2],
+    body: match[3] || "",
+  };
+}
+
+function getNextBulletMarker(marker) {
+  const numbered = String(marker || "").match(/^(\d+)([.)])$/);
+  if (numbered) return `${Number(numbered[1]) + 1}${numbered[2]}`;
+  return marker || "-";
 }
 
 function handleBulletIndent(event) {
@@ -1316,32 +1523,138 @@ function handleBulletIndent(event) {
     const nextStart = Math.max(lineStart, start - removable);
     renderDiscussionEditor(next, nextStart);
     updateActiveNote("discussion", next);
+    updateActiveNote("discussionHtml", sanitizeDiscussionHtml(els.noteDiscussion.innerHTML));
   } else {
     const next = `${value.slice(0, lineStart)}  ${line}${value.slice(lineEnd)}`;
     renderDiscussionEditor(next, start + 2);
     updateActiveNote("discussion", next);
+    updateActiveNote("discussionHtml", sanitizeDiscussionHtml(els.noteDiscussion.innerHTML));
   }
 }
 
 function handleBulletPaste(event) {
+  const html = event.clipboardData?.getData("text/html");
   const text = event.clipboardData?.getData("text/plain");
-  if (!text || !text.includes("\n")) return;
+  if (!html && (!text || !text.includes("\n"))) return;
 
   event.preventDefault();
   pushDiscussionUndo();
+
+  if (html) {
+    insertDiscussionHtml(normalizePastedNotesHtml(html, text));
+    saveDiscussionFromEditor();
+    return;
+  }
+
   const value = getDiscussionText();
   const start = getDiscussionCaret();
-  const end = start;
   const before = value.slice(0, start);
-  const after = value.slice(end);
-  const pasted = toBulletText(text);
+  const after = value.slice(start);
+  const pasted = text.trim();
   const prefix = before && !before.endsWith("\n") ? "\n" : "";
   const suffix = after && !pasted.endsWith("\n") ? "\n" : "";
-
   const next = `${before}${prefix}${pasted}${suffix}${after}`;
-  const nextPosition = before.length + prefix.length + pasted.length;
-  renderDiscussionEditor(next, nextPosition);
+
+  renderDiscussionEditor(next, before.length + prefix.length + pasted.length);
   updateActiveNote("discussion", next);
+  updateActiveNote("discussionHtml", sanitizeDiscussionHtml(els.noteDiscussion.innerHTML));
+}
+
+function insertDiscussionHtml(html) {
+  els.noteDiscussion.focus();
+  restoreDiscussionSelection();
+  document.execCommand("insertHTML", false, html);
+}
+
+function normalizePastedNotesHtml(html, fallbackText = "") {
+  const source = document.createElement("div");
+  source.innerHTML = String(html || "");
+  const lines = [];
+
+  function walkBlocks(node, depth = 0) {
+    [...node.childNodes].forEach((child) => {
+      if (child.nodeType === Node.TEXT_NODE) {
+        child.textContent.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).forEach((line) => {
+          lines.push(makeDiscussionLine(escapeHtml(line), depth));
+        });
+        return;
+      }
+
+      if (child.nodeType !== Node.ELEMENT_NODE) return;
+      const tag = child.tagName;
+
+      if (tag === "UL" || tag === "OL") {
+        [...child.children].forEach((item, index) => {
+          if (item.tagName === "LI") {
+            const marker = tag === "OL" ? `${index + 1}.` : "•";
+            lines.push(makeDiscussionLine(`${marker} ${inlineHtml(item, true)}`, depth));
+            [...item.children].filter((nested) => nested.tagName === "UL" || nested.tagName === "OL").forEach((nested) => {
+              walkBlocks(nested, depth + 1);
+            });
+          }
+        });
+        return;
+      }
+
+      if (["H1", "H2", "H3", "H4", "H5", "H6", "P", "DIV"].includes(tag)) {
+        const content = inlineHtml(child, true).trim();
+        if (content) lines.push(makeDiscussionLine(content, depth));
+        [...child.children].filter((nested) => nested.tagName === "UL" || nested.tagName === "OL").forEach((nested) => {
+          walkBlocks(nested, depth);
+        });
+        return;
+      }
+
+      walkBlocks(child, depth);
+    });
+  }
+
+  walkBlocks(source);
+
+  if (!lines.length) {
+    lines.push(
+      ...String(fallbackText || "")
+        .split(/\r?\n/)
+        .map((line) => line.trimEnd())
+        .filter(Boolean)
+        .map((line) => makeDiscussionLine(escapeHtml(line), 0))
+    );
+  }
+
+  return sanitizeDiscussionHtml(lines.join(""));
+}
+
+function makeDiscussionLine(content, depth = 0) {
+  const indent = "  ".repeat(Math.max(0, depth));
+  const className = depth > 0 ? "indented" : "top-level";
+  return `<div class="discussion-line ${className}">${indent}${content || "<br>"}</div>`;
+}
+
+function inlineHtml(node, skipNestedLists = false) {
+  return [...node.childNodes].map((child) => {
+    if (skipNestedLists && child.nodeType === Node.ELEMENT_NODE && ["UL", "OL"].includes(child.tagName)) {
+      return "";
+    }
+
+    if (child.nodeType === Node.TEXT_NODE) {
+      return escapeHtml(child.textContent.replace(/\s+/g, " "));
+    }
+
+    if (child.nodeType !== Node.ELEMENT_NODE) return "";
+
+    const tag = child.tagName;
+    const content = inlineHtml(child, skipNestedLists);
+    const style = child.getAttribute("style") || "";
+    const isBold = ["B", "STRONG"].includes(tag) || /font-weight\s*:\s*(bold|[6-9]00)/i.test(style);
+    const isItalic = ["I", "EM"].includes(tag) || /font-style\s*:\s*italic/i.test(style);
+    const isUnderline = tag === "U" || /text-decoration[^;]*underline/i.test(style);
+
+    let wrapped = content;
+    if (isUnderline) wrapped = `<u>${wrapped}</u>`;
+    if (isItalic) wrapped = `<em>${wrapped}</em>`;
+    if (isBold) wrapped = `<strong>${wrapped}</strong>`;
+    return wrapped;
+  }).join("");
 }
 
 function handleDiscussionBeforeInput() {
@@ -1352,10 +1665,18 @@ function handleDiscussionBeforeInput() {
 
 function handleDiscussionInput() {
   if (state.isRenderingDiscussion) return;
-  const caret = getDiscussionCaret();
-  const text = getDiscussionText();
-  renderDiscussionEditor(text, caret);
-  updateActiveNote("discussion", text);
+  normalizeDiscussionStructure();
+  saveDiscussionFromEditor();
+}
+
+function normalizeDiscussionStructure() {
+  [...els.noteDiscussion.children].forEach((child) => {
+    if (!["DIV", "P"].includes(child.tagName)) return;
+    child.classList.add("discussion-line");
+    if (!child.classList.contains("top-level") && !child.classList.contains("indented")) {
+      child.classList.add(/^\s+/.test(child.textContent || "") ? "indented" : "top-level");
+    }
+  });
 }
 
 async function handleHandwrittenNotesUpload(event) {
@@ -1396,8 +1717,8 @@ async function processHandwrittenNotesFile(file) {
     renderDiscussionEditor(nextText, nextText.length);
     updateActiveNote("discussion", nextText);
     els.handwritingStatus.textContent = method === "ai"
-      ? "Added AI-read notes to Discussion."
-      : "Added OCR text to Discussion. For better handwriting results, run the local server with an OpenAI API key.";
+      ? "Added AI-read notes to Meeting Notes."
+      : "Added OCR text to Meeting Notes. For better handwriting results, run the local server with an OpenAI API key.";
   } catch (error) {
     els.handwritingStatus.textContent = error.message || "Could not read that photo.";
   } finally {
@@ -1498,21 +1819,21 @@ function toBulletText(value) {
 }
 
 function isBulletLine(line) {
-  return /^(-\*\*|-\*|[-*>]|\d+[.)])\s+/.test(line);
+  return /^(-\*\*|-\*|\*\*|\*|[-\u2022>]|\d+[.)])\s+/.test(line);
 }
 
 function getLineMarker(trimmedLine) {
-  if (isClientDecisionLine(trimmedLine)) return "-**";
-  if (isActionItemLine(trimmedLine)) return "-*";
+  if (isClientDecisionLine(trimmedLine)) return "**";
+  if (isActionItemLine(trimmedLine)) return "*";
   return "-";
 }
 
 function isActionItemLine(line) {
-  return /^-?\s*\*(?!\*)/.test(line);
+  return /^-?\s*\*(?!\*)\s*/.test(line);
 }
 
 function isClientDecisionLine(line) {
-  return /^-?\s*\*\*/.test(line);
+  return /^-?\s*\*\*\s*/.test(line);
 }
 
 function createProject(clientName, projectName) {
@@ -1643,6 +1964,203 @@ async function handleAttendeePaste(event) {
   renderAttendeeImage(src);
 }
 
+async function handleScreenshotPaste(event) {
+  const note = activeNote();
+  if (!note) return;
+
+  const items = [...(event.clipboardData?.items || [])];
+  const imageItems = items.filter((item) => item.type.startsWith("image/"));
+  if (!imageItems.length) return;
+
+  event.preventDefault();
+  const images = await Promise.all(imageItems.map((item) => readFileAsDataUrl(item.getAsFile())));
+  const screenshots = [...(note.screenshots || []), ...images];
+  updateActiveNote("screenshots", screenshots);
+  renderScreenshots(screenshots);
+}
+
+function removeScreenshot(index) {
+  const note = activeNote();
+  if (!note) return;
+
+  const screenshots = [...(note.screenshots || [])];
+  screenshots.splice(index, 1);
+  updateActiveNote("screenshots", screenshots);
+  renderScreenshots(screenshots);
+}
+
+function runDiscussionCommand(command) {
+  if (!activeNote()) return;
+
+  els.noteDiscussion.focus();
+  restoreDiscussionSelection();
+
+  if (command === "bullet") {
+    applyBulletToCurrentLine();
+    return;
+  }
+
+  if (command === "indent" || command === "outdent") {
+    handleToolbarIndent(command === "outdent");
+    return;
+  }
+
+  pushDiscussionUndo();
+  document.execCommand(command, false, null);
+  saveDiscussionFromEditor();
+}
+
+function applyBulletToCurrentLine() {
+  const position = getDiscussionLinePosition();
+  if (!position) return;
+
+  pushDiscussionUndo();
+  const value = getDiscussionText();
+  const start = getOffsetFromLinePosition(position.lineIndex, position.offsetInLine);
+  const lineStart = getOffsetFromLinePosition(position.lineIndex, 0);
+  const lineEndIndex = value.indexOf("\n", lineStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const line = value.slice(lineStart, lineEnd);
+  const indent = line.match(/^\s*/)?.[0] || "";
+  const body = line.slice(indent.length).replace(/^(-\*\*|-\*|\*\*|\*|[-\u2022>]|\d+[.)])\s*/, "");
+  const nextLine = `${indent}- ${body}`;
+  const next = `${value.slice(0, lineStart)}${nextLine}${value.slice(lineEnd)}`;
+  const nextCaret = Math.max(lineStart + 2, start + (nextLine.length - line.length));
+
+  renderDiscussionEditor(next, nextCaret);
+  updateActiveNote("discussion", next);
+  updateActiveNote("discussionHtml", sanitizeDiscussionHtml(els.noteDiscussion.innerHTML));
+}
+
+function handleToolbarIndent(outdent = false) {
+  const position = getDiscussionLinePosition();
+  if (!position) return;
+
+  pushDiscussionUndo();
+  const value = getDiscussionText();
+  const start = getOffsetFromLinePosition(position.lineIndex, position.offsetInLine);
+  const lineStart = getOffsetFromLinePosition(position.lineIndex, 0);
+  const lineEndIndex = value.indexOf("\n", lineStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const line = value.slice(lineStart, lineEnd);
+
+  if (outdent) {
+    const removable = line.startsWith("  ") ? 2 : line.startsWith("\t") ? 1 : 0;
+    if (!removable) return;
+    const next = `${value.slice(0, lineStart)}${line.slice(removable)}${value.slice(lineEnd)}`;
+    renderDiscussionEditor(next, Math.max(lineStart, start - removable));
+    updateActiveNote("discussion", next);
+    updateActiveNote("discussionHtml", sanitizeDiscussionHtml(els.noteDiscussion.innerHTML));
+    return;
+  }
+
+  const next = `${value.slice(0, lineStart)}  ${line}${value.slice(lineEnd)}`;
+  renderDiscussionEditor(next, start + 2);
+  updateActiveNote("discussion", next);
+  updateActiveNote("discussionHtml", sanitizeDiscussionHtml(els.noteDiscussion.innerHTML));
+}
+
+function adjustDiscussionFontSize(direction) {
+  const note = activeNote();
+  if (!note) return;
+
+  const current = Number(note.discussionFontSize) || 16;
+  const next = direction === "increase" ? Math.min(22, current + 2) : Math.max(14, current - 2);
+  note.discussionFontSize = next;
+  note.updatedAt = new Date().toISOString();
+  applyDiscussionFontSize(next);
+  scheduleSave();
+}
+
+function autoCorrectMeetingNotes() {
+  const note = activeNote();
+  if (!note) return;
+
+  pushDiscussionUndo();
+  const original = getDiscussionText();
+  const corrected = original
+    .split(/\r?\n/)
+    .map(autoCorrectMeetingLine)
+    .join("\n");
+
+  renderDiscussionEditor(corrected, corrected.length);
+  updateActiveNote("discussion", corrected);
+  updateActiveNote("discussionHtml", sanitizeDiscussionHtml(els.noteDiscussion.innerHTML));
+
+  const originalLabel = els.autoCorrectButton.textContent;
+  els.autoCorrectButton.textContent = corrected === original ? "Checked" : "Corrected";
+  setTimeout(() => {
+    els.autoCorrectButton.textContent = originalLabel;
+  }, 1200);
+}
+
+function autoCorrectMeetingLine(line) {
+  const leading = line.match(/^\s*(?:-\*\*|-\*|\*\*|\*|[-\u2022>]|\d+[.)])?\s*/)?.[0] || "";
+  let body = line.slice(leading.length);
+
+  body = body
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/([,.;:!?])(?=\S)/g, "$1 ")
+    .replace(/\bteh\b/gi, "the")
+    .replace(/\btaht\b/gi, "that")
+    .replace(/\bthier\b/gi, "their")
+    .replace(/\brecieve\b/gi, "receive")
+    .replace(/\bseperate\b/gi, "separate")
+    .replace(/\bdefinately\b/gi, "definitely")
+    .replace(/\bsentance\b/gi, "sentence")
+    .replace(/\banythign\b/gi, "anything")
+    .replace(/\bnothign\b/gi, "nothing")
+    .replace(/\bsomethign\b/gi, "something")
+    .replace(/\bnet line\b/gi, "next line")
+    .replace(/\bfrist\b/gi, "first")
+    .replace(/\bbeleive\b/gi, "believe")
+    .replace(/\bbecuase\b/gi, "because")
+    .replace(/\bbecuse\b/gi, "because")
+    .replace(/\balot\b/gi, "a lot")
+    .replace(/\bthru\b/gi, "through")
+    .replace(/\bu\b/g, "you")
+    .replace(/\bur\b/g, "your")
+    .replace(/\bi\b/g, "I")
+    .replace(/\bim\b/gi, "I'm")
+    .replace(/\bill\b/gi, "I'll")
+    .replace(/\bive\b/gi, "I've")
+    .replace(/\bdont\b/gi, "don't")
+    .replace(/\bdidnt\b/gi, "didn't")
+    .replace(/\bcant\b/gi, "can't")
+    .replace(/\bwont\b/gi, "won't")
+    .replace(/\bdoesnt\b/gi, "doesn't")
+    .replace(/\bisnt\b/gi, "isn't")
+    .replace(/\baren't\b/gi, "aren't")
+    .replace(/\bwasnt\b/gi, "wasn't")
+    .replace(/\bwerent\b/gi, "weren't")
+    .replace(/\bshouldnt\b/gi, "shouldn't")
+    .replace(/\bcouldnt\b/gi, "couldn't")
+    .replace(/\bwouldnt\b/gi, "wouldn't")
+    .replace(/\btheyre\b/gi, "they're")
+    .replace(/\bthats\b/gi, "that's")
+    .replace(/\bwhats\b/gi, "what's")
+    .replace(/\blets\b/gi, "let's")
+    .replace(/\babatem?ent\b/gi, "abatement")
+    .replace(/\bexxon mobil\b/gi, "Exxon Mobil")
+    .replace(/\bkha\b/gi, "KHA")
+    .replace(/\bfacade\b/gi, "facade")
+    .replace(/\bfacades\b/gi, "facades")
+    .replace(/\bscreen shots\b/gi, "screenshots")
+    .replace(/\bai\b/g, "AI")
+    .replace(/\bpdf\b/g, "PDF")
+    .replace(/\bapi\b/g, "API")
+    .trim();
+
+  if (body && /^[a-z]/.test(body)) {
+    body = body.charAt(0).toUpperCase() + body.slice(1);
+  }
+
+  return `${leading}${body}`.trimEnd();
+}
+
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1689,35 +2207,100 @@ async function askNotes() {
 }
 
 function buildLocalQuestionAnswer(question, searchScope = "all") {
-  const terms = question
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((term) => term.length > 2);
+  const terms = getQuestionTerms(question);
+  const scopeLabel = searchScope.startsWith("project:") ? "in that project" : "across employees and projects";
+
+  if (!terms.length) {
+    return "Ask with a little more detail so I know what to look for in your notes.";
+  }
 
   const entries = getSearchEntries(searchScope);
   const matches = entries
-    .map(({ employee, project, note }) => {
-      const text = getNoteSearchText(note);
-      const score = terms.reduce((count, term) => count + (text.toLowerCase().includes(term) ? 1 : 0), 0);
-      return { employee, project, note, score, text };
-    })
+    .flatMap(({ employee, project, note }) => getSearchLines(note).map((line) => ({
+      employee,
+      project,
+      note,
+      line,
+      score: scoreQuestionLine(line, terms, question),
+    })))
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 4);
+    .slice(0, 5);
 
   if (!matches.length) {
-    return `AI answers are not connected in this version of the app.\n\nI did not find matching notes ${searchScope.startsWith("project:") ? "in that project" : "across employees and projects"} yet.`;
+    return [
+      `I do not see ${formatQuestionTopic(terms)} mentioned ${scopeLabel}.`,
+      "",
+      "This is a local note search because AI answers are not connected right now.",
+    ].join("\n");
   }
 
+  const directAnswer = isYesNoQuestion(question)
+    ? `Yes — I found ${formatQuestionTopic(terms)} in your notes.`
+    : `I found these notes about ${formatQuestionTopic(terms)}.`;
+
   return [
-    "AI answers are not connected in this version of the app.",
+    directAnswer,
     "",
-    `Best matches ${searchScope.startsWith("project:") ? "from that project" : "across employees and projects"}:`,
-    ...matches.map(({ employee, project, note }) => {
-      const preview = String(note.discussion || note.finalReport || "No note details yet.").replace(/\s+/g, " ").trim();
-      return `- ${employee.name} / ${projectLabel(project)} / ${note.date || "No date"} - ${note.title || "Untitled meeting"}: ${preview.slice(0, 220)}${preview.length > 220 ? "..." : ""}`;
+    ...matches.map(({ employee, project, note, line }) => {
+      return `- ${employee.name} / ${projectLabel(project)} / ${note.date || "No date"} - ${note.title || "Untitled meeting"}: ${line}`;
     }),
+    "",
+    "This is a local note search because AI answers are not connected right now.",
   ].join("\n");
+}
+
+function getQuestionTerms(question) {
+  const stopWords = new Set([
+    "the", "and", "for", "with", "that", "this", "from", "are", "was", "were", "has", "had", "have",
+    "does", "did", "can", "could", "would", "should", "what", "when", "where", "why", "how", "our",
+    "you", "your", "their", "there", "about", "into", "onto", "any", "all", "do",
+  ]);
+
+  return [...new Set(String(question || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((term) => term.length > 1 && !stopWords.has(term)))];
+}
+
+function getSearchLines(note) {
+  return [
+    note.title,
+    note.attendees,
+    note.discussion,
+    note.finalReport,
+    ...(Array.isArray(note.actionItems) ? note.actionItems : []),
+    ...(Array.isArray(note.decisionItems) ? note.decisionItems : []),
+  ]
+    .join("\n")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function scoreQuestionLine(line, terms, question) {
+  const lower = line.toLowerCase();
+  const tokens = new Set(lower.split(/[^a-z0-9]+/).filter(Boolean));
+  const phrase = terms.join(" ");
+  let score = phrase && lower.includes(phrase) ? terms.length + 2 : 0;
+
+  terms.forEach((term) => {
+    if (tokens.has(term)) score += 1;
+  });
+
+  if (isYesNoQuestion(question) && score >= Math.max(1, terms.length)) {
+    score += 1;
+  }
+
+  return score;
+}
+
+function formatQuestionTopic(terms) {
+  return terms.length ? `"${terms.join(" ")}"` : "that";
+}
+
+function isYesNoQuestion(question) {
+  return /^(do|does|did|is|are|was|were|can|could|would|should|have|has|had)\b/i.test(String(question || "").trim());
 }
 
 function getSearchEntries(searchScope = "all") {
@@ -1795,8 +2378,8 @@ function formatLocalArchiveProject(project) {
       "### Final Report",
       note.finalReport || "No final report created yet.",
       "",
-      "### Discussion Notes",
-      note.discussion || "No discussion notes.",
+      "### Meeting Notes",
+      note.discussion || "No meeting notes.",
     ].join("\n")),
   ].join("\n");
 }
@@ -1872,8 +2455,28 @@ els.removeAttendeeImageButton.addEventListener("click", () => {
   updateActiveNote("attendeeImage", "");
   renderAttendeeImage("");
 });
+els.formatButtons.forEach((button) => {
+  button.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    saveDiscussionSelection();
+  });
+  button.addEventListener("click", () => runDiscussionCommand(button.dataset.formatCommand));
+});
+els.fontSizeButtons.forEach((button) => {
+  button.addEventListener("mousedown", (event) => event.preventDefault());
+  button.addEventListener("click", () => adjustDiscussionFontSize(button.dataset.fontSize));
+});
+els.autoCorrectButton.addEventListener("mousedown", (event) => event.preventDefault());
+els.autoCorrectButton.addEventListener("click", autoCorrectMeetingNotes);
+els.screenshotPasteZone.addEventListener("paste", handleScreenshotPaste);
+els.screenshotPasteZone.addEventListener("click", () => els.screenshotPasteZone.focus());
+els.closeScreenshotDialog.addEventListener("click", closeScreenshot);
+els.screenshotDialog.addEventListener("click", (event) => {
+  if (event.target === els.screenshotDialog) closeScreenshot();
+});
 els.noteDiscussion.dataset.field = "discussion";
-els.noteDiscussion.addEventListener("focus", () => setBulletCaret(els.noteDiscussion));
+els.noteDiscussion.addEventListener("keyup", saveDiscussionSelection);
+els.noteDiscussion.addEventListener("mouseup", saveDiscussionSelection);
 els.noteDiscussion.addEventListener("beforeinput", handleDiscussionBeforeInput);
 els.noteDiscussion.addEventListener("keydown", handleBulletKeydown);
 els.noteDiscussion.addEventListener("paste", handleBulletPaste);

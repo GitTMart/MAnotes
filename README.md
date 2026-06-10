@@ -30,11 +30,14 @@ Your notes are stored locally in `data/notes.json`.
 - Projects are labeled by Client and Project name.
 - Projects appear in the left list and as tabs across the top for the selected employee.
 - Click a project on the left to see that project's full saved note history.
-- Take meeting notes in the Discussion area.
-- Discussion automatically starts new lines as bullet points, and Tab / Shift+Tab indent or outdent bullets.
-- Start a line with `-*` for an Action Item.
-- Start a line with `-**` for a Client Decision.
+- Take meeting notes in the Meeting Notes area.
+- Meeting Notes starts as a plain writing area. Use the Bullet button when you want a bulleted line; pressing Enter on a bulleted line continues the bullet. Use Tab / Shift+Tab to indent or outdent.
+- Use the formatting bar below Handwritten Notes for bold, italic, underline, bullets, indent, outdent, font size, and auto correct.
+- Pasted rich notes keep bold text and nested bullets in Meeting Notes.
+- Start a line with `*` for an Action Item.
+- Start a line with `**` for a Client Decision.
 - Click Create Report to organize the note into a final report.
 - The Find Anything section sits above notes and can be collapsed. AI search checks all employees and projects by default, or you can choose one project from the scope dropdown.
 - You can paste an attendee screenshot into the attendee screenshot box, or paste while the attendee field is active.
+- You can paste meeting screenshots into the screenshot boxes beside the notes, then click a screenshot to enlarge it.
 - Click Archive Notes to export all notes into employee and project folders under `Archived Notes`.

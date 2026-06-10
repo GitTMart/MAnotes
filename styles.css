@@ -343,6 +343,18 @@ h1 {
   align-items: start;
 }
 
+.note-details-panel {
+  grid-column: 1 / -1;
+}
+
+.meeting-notes-panel {
+  grid-column: 1;
+}
+
+.screenshot-panel {
+  grid-column: 2;
+}
+
 .notes-panel,
 .lists-panel,
 .search-panel,
@@ -419,7 +431,7 @@ h1 {
 
 .note-fields {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 190px;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.6fr);
   gap: 14px;
 }
 
@@ -573,6 +585,39 @@ textarea {
   font-weight: 800;
 }
 
+.meeting-toolbar {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  padding: 7px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.toolbar-button {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  min-height: 34px;
+  padding: 6px 10px;
+  background: white;
+  color: #243241;
+  font-weight: 850;
+}
+
+.toolbar-button:hover {
+  border-color: var(--line-strong);
+  background: #f8eeee;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--line);
+  margin: 0 2px;
+}
+
 .handwriting-details {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -632,7 +677,8 @@ textarea {
   min-height: 250px;
   padding: 14px;
   font-size: 16px;
-  line-height: 28px;
+  font-weight: 400;
+  line-height: 1.55;
   overflow: auto;
   white-space: pre-wrap;
 }
@@ -644,16 +690,23 @@ textarea {
 }
 
 .discussion-line {
-  min-height: 28px;
+  min-height: 24px;
+  padding: 1px 0;
   white-space: pre-wrap;
 }
 
-.discussion-line.top-level {
-  font-weight: 800;
+.discussion-line.top-level,
+.discussion-line.indented {
+  font-weight: 400;
 }
 
 .discussion-line.indented {
-  font-weight: 400;
+  padding-left: 22px;
+}
+
+.discussion-line strong,
+.discussion-line b {
+  font-weight: 850;
 }
 
 .discussion-key {
@@ -715,6 +768,12 @@ textarea {
 .report-box {
   min-height: 340px;
   padding: 16px;
+}
+
+.report-panel {
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+  padding-top: 18px;
 }
 
 .report-actions {
@@ -795,6 +854,95 @@ textarea {
 
 .report-list li {
   margin: 3px 0;
+  white-space: pre-wrap;
+}
+
+.screenshot-panel {
+  display: grid;
+  gap: 2px;
+}
+
+.screenshot-paste-zone {
+  min-height: 430px;
+  border: 2px dashed var(--line-strong);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 16px;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  color: #344356;
+  outline: none;
+}
+
+.screenshot-paste-zone:focus,
+.screenshot-paste-zone:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(159, 47, 47, 0.1);
+  background: white;
+}
+
+.screenshot-paste-zone span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.screenshot-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.screenshot-item {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  padding: 10px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 8px;
+  min-height: 160px;
+}
+
+.screenshot-item img {
+  width: 100%;
+  height: 124px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  cursor: zoom-in;
+}
+
+.screenshot-item button {
+  justify-self: end;
+  min-height: 32px;
+  padding-block: 5px;
+}
+
+.screenshot-dialog {
+  width: min(1100px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 16px;
+  background: white;
+}
+
+.screenshot-dialog[open] {
+  display: grid;
+  gap: 12px;
+}
+
+.screenshot-dialog img {
+  max-width: 100%;
+  max-height: calc(100vh - 120px);
+  object-fit: contain;
+  justify-self: center;
+}
+
+.screenshot-dialog button {
+  justify-self: end;
 }
 
 .timeline {
@@ -909,6 +1057,12 @@ dialog::backdrop {
 @media (max-width: 1120px) {
   .notes-layout {
     grid-template-columns: 1fr;
+  }
+
+  .note-details-panel,
+  .meeting-notes-panel,
+  .screenshot-panel {
+    grid-column: 1;
   }
 }
 

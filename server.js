@@ -169,7 +169,10 @@ function normalizeProject(project) {
           meetingType: String(note.meetingType || ""),
           attendees: String(note.attendees || ""),
           attendeeImage: String(note.attendeeImage || ""),
+          screenshots: Array.isArray(note.screenshots) ? note.screenshots.map(String) : [],
           discussion: String(note.discussion || note.body || ""),
+          discussionHtml: String(note.discussionHtml || ""),
+          discussionFontSize: Number(note.discussionFontSize) || 16,
           actionItems: Array.isArray(note.actionItems) ? note.actionItems.map(String) : [],
           completedActionItems: Array.isArray(note.completedActionItems) ? note.completedActionItems.map(String) : [],
           decisionItems: Array.isArray(note.decisionItems) ? note.decisionItems.map(String) : parseLines(note.decisions),
@@ -407,7 +410,7 @@ async function askQuestion(question, projectId) {
         {
           role: "system",
           content:
-            "Answer questions using only the meeting notes provided. If the notes do not contain the answer, say that clearly. Include dates or project context when useful.",
+            "Answer directly using only the meeting notes provided. For yes/no questions, start with Yes, No, or I do not see that in the notes. Then give the specific note line or project/date that supports the answer. If the notes do not contain the answer, say that clearly and do not guess.",
         },
         {
           role: "user",
@@ -461,7 +464,7 @@ async function createReport(projectId, noteId) {
         {
           role: "system",
           content:
-            "Create a clear final meeting report from raw notes. Use plain section headers without Markdown # symbols. Put Action Items first and Client Decisions second. Treat lines marked -* as action items and lines marked -** as client decisions. Treat the provided action items and client decisions as authoritative. Do not invent facts.",
+            "Create a clear final meeting report from raw notes. Use plain section headers without Markdown # symbols. Put Action Items first and Client Decisions second. Treat lines marked * as action items and lines marked ** as client decisions. Treat the provided action items and client decisions as authoritative. Do not invent facts.",
         },
         {
           role: "user",
@@ -472,7 +475,7 @@ async function createReport(projectId, noteId) {
             `Meeting type: ${note.meetingType || "Not listed"}`,
             `Attendees: ${note.attendees || "Not listed"}`,
             `Action items from * lines:\n${formatList(parsed.actionItems)}`,
-            `Client decisions from > lines:\n${formatList(parsed.clientDecisions)}`,
+            `Client decisions from ** lines:\n${formatList(parsed.clientDecisions)}`,
             `Other notes:\n${formatList(parsed.notes)}`,
             `Raw notes:\n${note.discussion}`,
           ].join("\n\n"),
@@ -516,7 +519,7 @@ async function transcribeHandwrittenNotes(image) {
         {
           role: "system",
           content:
-            "Transcribe handwritten meeting notes from images. Preserve short bullet-style lines. Use -* at the start of action item lines when a star or action marker appears. Use -** only for clear client decisions. Do not invent text. If a word is unclear, use [unclear]. Return only the notes text.",
+            "Transcribe handwritten meeting notes from images. Preserve short bullet-style lines. Use * at the start of action item lines when a star or action marker appears. Use ** only for clear client decisions. Do not invent text. If a word is unclear, use [unclear]. Return only the notes text.",
         },
         {
           role: "user",
@@ -651,7 +654,7 @@ function buildPlainReportText(project, note) {
 }
 
 function formatPlainList(items) {
-  return items.length ? items.map((item) => `- ${item}`).join("\n") : "None noted";
+  return items.length ? items.map((item) => `${getReportItemIndent(item)}- ${String(item).trim()}`).join("\n") : "None noted";
 }
 
 function buildSimplePdf(text) {
@@ -714,14 +717,15 @@ function buildPdfPageStream(lines) {
 function wrapPdfLines(text, maxLength) {
   return text.split(/\r?\n/).flatMap((line) => {
     if (!line.trim()) return [""];
-    const words = line.split(/\s+/);
+    const indent = line.match(/^\s*/)?.[0] || "";
+    const words = line.trim().split(/\s+/);
     const lines = [];
-    let current = "";
+    let current = indent;
     words.forEach((word) => {
-      const next = current ? `${current} ${word}` : word;
+      const next = current.trim() ? `${current} ${word}` : `${current}${word}`;
       if (next.length > maxLength) {
         if (current) lines.push(current);
-        current = word;
+        current = `${indent}${word}`;
       } else {
         current = next;
       }
@@ -765,8 +769,8 @@ function formatArchiveMarkdown(project, note) {
     "## Final Report",
     note.finalReport?.trim() || "No final report created yet.",
     "",
-    "## Discussion Notes",
-    note.discussion?.trim() || "No discussion notes.",
+    "## Meeting Notes",
+    note.discussion?.trim() || "No meeting notes.",
     "",
   ].join("\n");
 }
@@ -794,20 +798,20 @@ function parseReportNotes(discussion) {
 
   String(discussion || "")
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
+    .filter((line) => line.trim())
     .forEach((line) => {
-      if (isClientDecisionLine(line)) {
-        clientDecisions.push(cleanMarkedLine(line.replace(/^-?\s*\*\*/, "")));
+      const trimmedLine = line.trim();
+      if (isClientDecisionLine(trimmedLine)) {
+        clientDecisions.push(cleanMarkedLine(trimmedLine.replace(/^-?\s*\*\*/, "")));
         return;
       }
 
-      if (isActionItemLine(line)) {
-        actionItems.push(cleanMarkedLine(line.replace(/^-?\s*\*/, "")));
+      if (isActionItemLine(trimmedLine)) {
+        actionItems.push(cleanMarkedLine(trimmedLine.replace(/^-?\s*\*/, "")));
         return;
       }
 
-      notes.push(cleanMarkedLine(line));
+      notes.push(cleanNoteLine(line));
     });
 
   return {
@@ -821,12 +825,23 @@ function cleanMarkedLine(value) {
   return String(value || "").replace(/^[-*\u2022\d.)\s]+/, "").trim();
 }
 
+function cleanNoteLine(value) {
+  const line = String(value || "");
+  const indent = line.match(/^\s*/)?.[0] || "";
+  const text = line.slice(indent.length).replace(/^[-\u2022\d.)]+\s*/, "").trim();
+  return text ? `${indent}${text}` : "";
+}
+
+function getReportItemIndent(item) {
+  return String(item || "").match(/^\s*/)?.[0] || "";
+}
+
 function isActionItemLine(line) {
-  return /^-?\s*\*(?!\*)/.test(line);
+  return /^-?\s*\*(?!\*)\s*/.test(line);
 }
 
 function isClientDecisionLine(line) {
-  return /^-?\s*\*\*/.test(line);
+  return /^-?\s*\*\*\s*/.test(line);
 }
 
 function buildFallbackReport(project, note, parsed) {
@@ -849,7 +864,7 @@ function buildFallbackReport(project, note, parsed) {
 }
 
 function formatList(items) {
-  return items.length ? items.map((item) => `- ${item}`).join("\n") : "- None noted";
+  return items.length ? items.map((item) => `${getReportItemIndent(item)}- ${String(item).trim()}`).join("\n") : "- None noted";
 }
 
 function extractResponseText(result) {
